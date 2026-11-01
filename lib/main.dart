@@ -51,6 +51,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
   double _speedMs = 100;
   bool _anomalyActive = false;
   String _detectedWord = 'SPIRITO';
+  String _evpFreqStr = '';
   double _ttsVolume = 1.0;
   bool _enableVoice = true;
   bool _enableChime = true;
@@ -250,158 +251,48 @@ class _MainTabScreenState extends State<MainTabScreen> {
     _stopScan();
 
     final pool = _phonemes.where((w) => !_recentPickedWords.contains(w)).toList();
-    final chosenWord = pool.isNotEmpty ? pool[Random().nextInt(pool.length)] : _phonemes[Random().nextInt(_phonemes.length)];
+    final chosenWord = pool.isNotEmpty
+        ? pool[Random().nextInt(pool.length)]
+        : _phonemes[Random().nextInt(_phonemes.length)];
     _recentPickedWords.add(chosenWord);
     if (_recentPickedWords.length > 5) _recentPickedWords.removeAt(0);
+
+    final freqStr = _band == 'FM'
+        ? '${_frequency.toStringAsFixed(2)} MHz'
+        : '${_frequency.round()} kHz';
 
     setState(() {
       _isScanning = false;
       _anomalyActive = true;
       _detectedWord = chosenWord;
+      _evpFreqStr = freqStr;
     });
 
     if (_enableChime) _playNativeChime();
     if (_enableVoice) _speakNativeWord(chosenWord);
 
-    final freqStr = _band == 'FM' ? '${_frequency.toStringAsFixed(2)} MHz' : '${_frequency.round()} kHz';
+    // Salva automaticamente nell'archivio
+    _archive.insert(0, {
+      'date': 'Oggi',
+      'freq': freqStr,
+      'band': _band,
+      'word': chosenWord,
+      'snr': '30 dB'
+    });
+    _recentList.insert(0, {
+      'freq': freqStr,
+      'time': 'Adesso',
+      'active': 'true',
+      'word': chosenWord
+    });
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: Container(
-          width: 360,
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0F1A2A),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF1B3550)),
-            boxShadow: const [
-              BoxShadow(color: Colors.black87, blurRadius: 20, spreadRadius: 4),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('⚡ ANOMALIA EVP INTERCETTATA', style: TextStyle(color: Color(0xFFFF3366), fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1)),
-                  GestureDetector(
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      setState(() => _anomalyActive = false);
-                      _toggleScan();
-                    },
-                    child: const Text('✕', style: TextStyle(color: Color(0xFF4D6682), fontSize: 16)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: const Color(0xFF00EFFF), width: 2),
-                    ),
-                    child: const Center(
-                      child: Text('i', style: TextStyle(color: Color(0xFF00EFFF), fontSize: 22, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic)),
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        RichText(
-                          text: TextSpan(
-                            style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
-                            children: [
-                              const TextSpan(text: 'Parola rilevata a '),
-                              TextSpan(text: freqStr, style: const TextStyle(color: Color(0xFF00EFFF), fontFamily: 'monospace')),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            const Text('VOCE: ', style: TextStyle(color: Color(0xFF8CA2BA), fontSize: 11)),
-                            Flexible(
-                              child: Text(_detectedWord, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFFFFB700), fontWeight: FontWeight.bold, fontSize: 13.5)),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        const Text('Salvare nell\'archivio scientifico?', style: TextStyle(color: Color(0xFF8CA2BA), fontSize: 12.5)),
-                      ],
-                    ),
-                  )
-                ],
-              ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0x2200FF88),
-                        side: const BorderSide(color: Color(0xFF00FF88), width: 1.5),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                      ),
-                      onPressed: () {
-                        setState(() {
-                          _archive.insert(0, {
-                            'date': 'Oggi',
-                            'freq': freqStr,
-                            'band': _band,
-                            'word': _detectedWord,
-                            'snr': '30 dB'
-                          });
-                          _recentList.insert(0, {
-                            'freq': freqStr,
-                            'time': 'Adesso',
-                            'active': 'true',
-                            'word': _detectedWord
-                          });
-                          _anomalyActive = false;
-                        });
-                        Navigator.pop(ctx);
-                        _toggleScan();
-                      },
-                      child: const Text('SÌ', style: TextStyle(color: Color(0xFF00FF88), fontWeight: FontWeight.w800, letterSpacing: 2)),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF09131E),
-                        side: const BorderSide(color: Color(0xFF1A324B), width: 1.5),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                      ),
-                      onPressed: () {
-                        setState(() => _anomalyActive = false);
-                        Navigator.pop(ctx);
-                        _toggleScan();
-                      },
-                      child: const Text('NO', style: TextStyle(color: Color(0xFF8CA2BA), fontWeight: FontWeight.w800, letterSpacing: 2)),
-                    ),
-                  ),
-                ],
-              )
-            ],
-          ),
-        ),
-      ),
-    );
+    // Auto-riavvio scansione dopo 6 secondi
+    Future.delayed(const Duration(seconds: 6), () {
+      if (mounted && _anomalyActive) {
+        setState(() => _anomalyActive = false);
+        _toggleScan();
+      }
+    });
   }
 
   // DIALOG SCHERMATA CODICE SMARTPHONE PER KEYDIGITALE
@@ -859,6 +750,87 @@ class _MainTabScreenState extends State<MainTabScreen> {
             ),
           ),
           const SizedBox(height: 10),
+
+          // PANNELLO EVP INLINE — appare quando l'anomalia e attiva, niente popup
+          if (_anomalyActive) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F1A2A),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFFF3366), width: 1.5),
+                boxShadow: const [BoxShadow(color: Color(0x44FF3366), blurRadius: 12, spreadRadius: 2)],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('⚡ ANOMALIA EVP INTERCETTATA', style: TextStyle(color: Color(0xFFFF3366), fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1)),
+                      GestureDetector(
+                        onTap: () { setState(() => _anomalyActive = false); _toggleScan(); },
+                        child: const Icon(Icons.close, color: Color(0xFF4D6682), size: 18),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('FREQ: $_evpFreqStr', style: const TextStyle(color: Color(0xFF4D6682), fontSize: 10, fontFamily: 'monospace')),
+                            const SizedBox(height: 4),
+                            Text(
+                              _detectedWord,
+                              style: const TextStyle(
+                                color: Color(0xFFFFB700),
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold,
+                                fontFamily: 'monospace',
+                                letterSpacing: 2,
+                                shadows: [Shadow(color: Color(0xAAFFB700), blurRadius: 12)],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Column(
+                        children: [
+                          const Text('FORZA', style: TextStyle(color: Color(0xFF4D6682), fontSize: 9)),
+                          const SizedBox(height: 2),
+                          const Text('▐▐▐▐░', style: TextStyle(color: Color(0xFF00FF88), fontSize: 12)),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  const Divider(color: Color(0xFF1B3550), height: 1),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Text('Salvato in archivio automaticamente', style: TextStyle(color: Color(0xFF4D6682), fontSize: 10)),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () { setState(() => _anomalyActive = false); _toggleScan(); },
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                          side: const BorderSide(color: Color(0xFF1A324B)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                        ),
+                        child: const Text('CONTINUA', style: TextStyle(color: Color(0xFF00EFFF), fontWeight: FontWeight.bold, fontSize: 11)),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
 
           // Modalità AM / FM
           Row(
