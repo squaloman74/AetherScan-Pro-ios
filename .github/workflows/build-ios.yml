@@ -1,4 +1,4 @@
-name: Build AetherScan Pro iOS (IPA) - Beta 4.1
+name: Build AetherScan Pro iOS (IPA) - Beta 1
 
 on:
   push:
@@ -33,9 +33,9 @@ jobs:
         run: |
           mkdir -p Payload
           cp -r build/ios/iphoneos/Runner.app Payload/
-          zip -r AetherScan-Pro-v26-beta41-unsigned.ipa Payload
+          zip -r AetherScan-Pro-v26-beta1-unsigned.ipa Payload
           mkdir -p release-ios
-          mv AetherScan-Pro-v26-beta41-unsigned.ipa release-ios/
+          mv AetherScan-Pro-v26-beta1-unsigned.ipa release-ios/
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
@@ -46,10 +46,10 @@ jobs:
       - name: Create GitHub Release with IPA
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v26-beta41
-          name: "AetherScan Pro v26 Beta 4.1"
+          tag_name: v26-beta1
+          name: "AetherScan Pro v26 Beta 1"
           body: |
-            ## AetherScan Pro v26 Beta 4.1
+            ## AetherScan Pro v26 Beta 1
 
             ### Fix inclusi in questa versione:
             - TTS iOS 17+ risolto: rimosso duckOthers, conflitto con AVSpeechSynthesizer
