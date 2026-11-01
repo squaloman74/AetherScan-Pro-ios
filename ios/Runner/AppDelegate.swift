@@ -2,15 +2,24 @@ import Flutter
 import UIKit
 import AVFoundation
 import CommonCrypto
+import CoreMotion
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
+@objc class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate, FlutterStreamHandler {
 
   private let channelName       = "com.aetherscan.pro/audio"
+  private let sensorChannelName = "com.aetherscan.pro/sensors"
   private let licenseKey        = "aetherscan_pro_license"
   private let synth             = AVSpeechSynthesizer()
   private var audioPlayer       : AVAudioPlayer?
   private var channelRegistered = false
+
+  // Sensori
+  private let motionManager     = CMMotionManager()
+  private var sensorEventSink   : FlutterEventSink?
+  private var lastProximityNear = false
+  private var emfBaseline       : Double = -1
+  private var emfSpikeActive    = false
 
   private func log(_ msg: String) { NSLog("[AETHER] %@", msg) }
 
@@ -26,11 +35,8 @@ import CommonCrypto
     UIApplication.shared.isIdleTimerDisabled = true
     setupAudioSession()
 
-    // Tentativo immediato (app senza SceneDelegate)
     registerChannel()
 
-    // Con SceneDelegate la window diventa disponibile solo dopo
-    // che la scena si connette → ascoltiamo didBecomeActive
     NotificationCenter.default.addObserver(
       self,
       selector: #selector(onAppBecameActive),
@@ -46,8 +52,6 @@ import CommonCrypto
   private func registerChannel() {
     guard !channelRegistered else { return }
 
-    // Cerca il FlutterViewController: prima in window AppDelegate,
-    // poi nelle scene attive (SceneDelegate architecture)
     var flutterVC: FlutterViewController?
 
     if let vc = window?.rootViewController as? FlutterViewController {
@@ -64,13 +68,14 @@ import CommonCrypto
     }
 
     guard let vc = flutterVC else {
-      log("window non ancora pronta — attendo didBecomeActive")
+      log("window non ancora pronta - attendo didBecomeActive")
       return
     }
 
     channelRegistered = true
-    log("MethodChannel registrato correttamente")
+    log("MethodChannel + EventChannel registrati")
 
+    // ── MethodChannel ──
     let ch = FlutterMethodChannel(name: channelName, binaryMessenger: vc.binaryMessenger)
     ch.setMethodCallHandler { [weak self] call, result in
       guard let self = self else { return }
@@ -81,14 +86,14 @@ import CommonCrypto
 
       case "getSavedLicense":
         let v = UserDefaults.standard.string(forKey: self.licenseKey) ?? ""
-        self.log("getSavedLicense → \(v.isEmpty ? "VUOTA" : "OK (\(v.count) chars)")")
+        self.log("getSavedLicense -> \(v.isEmpty ? "VUOTA" : "OK (\(v.count) chars)")")
         result(v)
 
       case "saveLicense":
         let k = (call.arguments as? [String: Any])?["licenseKey"] as? String ?? ""
         UserDefaults.standard.set(k, forKey: self.licenseKey)
         UserDefaults.standard.synchronize()
-        self.log("saveLicense → \(k.count) chars salvati")
+        self.log("saveLicense -> \(k.count) chars salvati")
         result(true)
 
       case "speak":
@@ -96,7 +101,7 @@ import CommonCrypto
         let text   = args?["text"] as? String ?? ""
         let vol    = (args?["volume"] as? Double).map { Float($0) } ?? 1.0
         let gender = args?["gender"] as? String ?? "female"
-        self.log("speak → \"\(text)\" gender=\(gender)")
+        self.log("speak -> \"\(text)\" gender=\(gender)")
         self.speak(text: text, vol: vol, gender: gender)
         result(true)
 
@@ -109,6 +114,14 @@ import CommonCrypto
 
       case "playChime":
         self.playChime()
+        result(true)
+
+      case "playProximityAlert":
+        self.playProximityAlert()
+        result(true)
+
+      case "playEmfAlert":
+        self.playEmfAlert()
         result(true)
 
       case "setWakeLock":
@@ -132,6 +145,98 @@ import CommonCrypto
         result(FlutterMethodNotImplemented)
       }
     }
+
+    // ── EventChannel (sensori) ──
+    let sensorCh = FlutterEventChannel(name: sensorChannelName, binaryMessenger: vc.binaryMessenger)
+    sensorCh.setStreamHandler(self)
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // FlutterStreamHandler
+  // ──────────────────────────────────────────────────────────────────
+  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    sensorEventSink = events
+    startProximitySensor()
+    startMagnetometer()
+    log("Sensori avviati: prossimita + EMF magnetometro")
+    return nil
+  }
+
+  func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    stopSensors()
+    sensorEventSink = nil
+    log("Sensori fermati")
+    return nil
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Sensore di Prossimita
+  // ──────────────────────────────────────────────────────────────────
+  private func startProximitySensor() {
+    UIDevice.current.isProximityMonitoringEnabled = true
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(proximityChanged),
+      name: UIDevice.proximityStateDidChangeNotification,
+      object: nil
+    )
+  }
+
+  @objc private func proximityChanged() {
+    let near = UIDevice.current.proximityState
+    guard near != lastProximityNear else { return }
+    lastProximityNear = near
+    log("Prossimita: \(near ? "VICINO" : "LONTANO")")
+    DispatchQueue.main.async {
+      self.sensorEventSink?(["type": "proximity", "near": near])
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Magnetometro EMF
+  // ──────────────────────────────────────────────────────────────────
+  private func startMagnetometer() {
+    guard motionManager.isMagnetometerAvailable else {
+      log("Magnetometro non disponibile")
+      return
+    }
+    motionManager.magnetometerUpdateInterval = 0.4
+    motionManager.startMagnetometerUpdates(to: .main) { [weak self] data, _ in
+      guard let self = self, let data = data else { return }
+      let x = data.magneticField.x
+      let y = data.magneticField.y
+      let z = data.magneticField.z
+      let magnitude = sqrt(x*x + y*y + z*z)
+
+      if self.emfBaseline < 0 {
+        self.emfBaseline = magnitude
+        return
+      }
+
+      let delta = abs(magnitude - self.emfBaseline)
+      let spikeThreshold = 25.0
+
+      let isSpike: Bool
+      if delta > spikeThreshold && !self.emfSpikeActive {
+        self.emfSpikeActive = true
+        isSpike = true
+        self.log("EMF SPIKE: \(String(format: "%.1f", delta)) uT sopra baseline")
+      } else if delta <= spikeThreshold * 0.5 {
+        self.emfSpikeActive = false
+        isSpike = false
+      } else {
+        isSpike = false
+      }
+
+      self.emfBaseline = self.emfBaseline * 0.98 + magnitude * 0.02
+      self.sensorEventSink?(["type": "emf", "value": magnitude, "delta": delta, "spike": isSpike])
+    }
+  }
+
+  private func stopSensors() {
+    UIDevice.current.isProximityMonitoringEnabled = false
+    NotificationCenter.default.removeObserver(self, name: UIDevice.proximityStateDidChangeNotification, object: nil)
+    motionManager.stopMagnetometerUpdates()
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -157,12 +262,10 @@ import CommonCrypto
     let utt = AVSpeechUtterance(string: text)
     let voices = AVSpeechSynthesisVoice.speechVoices()
 
-    // Cerca voce italiana del genere richiesto
     let wantedGender: AVSpeechSynthesisVoiceGender = gender == "male" ? .male : .female
     if let v = voices.first(where: { $0.language == "it-IT" && $0.gender == wantedGender }) {
       utt.voice = v; log("TTS voce: \(v.name) [\(gender)]")
     } else if let v = voices.first(where: { $0.language == "it-IT" }) {
-      // Fallback: qualsiasi voce italiana
       utt.voice = v; log("TTS voce fallback it-IT: \(v.name)")
     } else if let v = voices.first(where: { $0.language.hasPrefix("en") && $0.gender == wantedGender }) {
       utt.voice = v; log("TTS fallback en [\(gender)]: \(v.name)")
@@ -172,7 +275,7 @@ import CommonCrypto
       log("TTS: nessuna voce specifica, uso sistema")
     }
     utt.rate            = AVSpeechUtteranceDefaultSpeechRate * 0.85
-    utt.pitchMultiplier = gender == "male" ? 0.80 : 1.10  // tono più basso per maschile, più alto per femminile
+    utt.pitchMultiplier = gender == "male" ? 0.80 : 1.10
     utt.volume          = max(0.1, min(1.0, vol))
     synth.speak(utt)
     log("TTS speak() eseguito, isSpeaking=\(synth.isSpeaking)")
@@ -201,6 +304,8 @@ Volume sistema: \(session.outputVolume)
 Voci IT installate: \(voci.isEmpty ? "NESSUNA" : voci)
 TTS in corso: \(synth.isSpeaking)
 Licenza salvata: \(saved.isEmpty ? "NO" : "SI (\(saved.count) chars)")
+Magnetometro: \(motionManager.isMagnetometerActive ? "ATTIVO" : "INATTIVO")
+EMF baseline: \(String(format: "%.1f", emfBaseline)) uT
 """
     log(report)
     return report
@@ -218,7 +323,7 @@ Licenza salvata: \(saved.isEmpty ? "NO" : "SI (\(saved.count) chars)")
   }
 
   // ──────────────────────────────────────────────────────────────────
-  // Beep / Chime — AVAudioPlayer con PCM generato
+  // Beep / Chime / Alert suoni
   // ──────────────────────────────────────────────────────────────────
   private func playTone(hz: Int, ms: Int) {
     DispatchQueue.global(qos: .userInitiated).async {
@@ -237,7 +342,7 @@ Licenza salvata: \(saved.isEmpty ? "NO" : "SI (\(saved.count) chars)")
         self.audioPlayer = try AVAudioPlayer(data: wavData)
         self.audioPlayer?.prepareToPlay()
         let ok = self.audioPlayer?.play() ?? false
-        self.log("playTone \(hz)Hz → play()=\(ok)")
+        self.log("playTone \(hz)Hz -> play()=\(ok)")
       } catch {
         self.log("playTone errore: \(error.localizedDescription)")
       }
@@ -253,8 +358,26 @@ Licenza salvata: \(saved.isEmpty ? "NO" : "SI (\(saved.count) chars)")
     }
   }
 
+  func playProximityAlert() {
+    for (i, freq) in [1200, 900, 1200, 900].enumerated() {
+      DispatchQueue.global(qos: .userInitiated)
+        .asyncAfter(deadline: .now() + Double(i) * 0.12) {
+          self.playTone(hz: freq, ms: 80)
+        }
+    }
+  }
+
+  func playEmfAlert() {
+    for (i, freq) in [200, 220, 200].enumerated() {
+      DispatchQueue.global(qos: .userInitiated)
+        .asyncAfter(deadline: .now() + Double(i) * 0.18) {
+          self.playTone(hz: freq, ms: 150)
+        }
+    }
+  }
+
   // ──────────────────────────────────────────────────────────────────
-  // WAV builder — usa append(contentsOf:) esplicito (compila sempre)
+  // WAV builder
   // ──────────────────────────────────────────────────────────────────
   private func buildWav(pcm: Data, sampleRate: Int) -> Data {
     let channels    = 1
@@ -270,7 +393,7 @@ Licenza salvata: \(saved.isEmpty ? "NO" : "SI (\(saved.count) chars)")
     wav.append(contentsOf: [UInt8]("WAVE".utf8))
     wav.append(contentsOf: [UInt8]("fmt ".utf8))
     wav.append(contentsOf: le32(16))
-    wav.append(contentsOf: le16(1))          // PCM
+    wav.append(contentsOf: le16(1))
     wav.append(contentsOf: le16(channels))
     wav.append(contentsOf: le32(sampleRate))
     wav.append(contentsOf: le32(byteRate))

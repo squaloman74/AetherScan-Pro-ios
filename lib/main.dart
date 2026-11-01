@@ -35,6 +35,7 @@ class MainTabScreen extends StatefulWidget {
 
 class _MainTabScreenState extends State<MainTabScreen> {
   static const _audioChannel = MethodChannel('com.aetherscan.pro/audio');
+  static const _sensorChannel = EventChannel('com.aetherscan.pro/sensors');
 
   int _currentTab = 0; // 0: SCANNER, 1: ARCHIVIO, 2: ANALISI, 3: IMPOSTAZIONI
 
@@ -63,6 +64,13 @@ class _MainTabScreenState extends State<MainTabScreen> {
   bool _updateAvailable = false;
   String? _pendingIpaUrl;
   String _audioDiagnosticResult = ''; // risultato diagnostica audio
+  StreamSubscription<dynamic>? _sensorSubscription;
+  bool _proximityAlert = false;
+  bool _emfSpikeAlert = false;
+  double _emfValue = 0.0;
+  double _emfDelta = 0.0;
+  DateTime? _lastProximityAlertTime;
+  DateTime? _lastEmfAlertTime;
 
   final List<String> _phonemes = [
     // Nomi di persona
