@@ -115,8 +115,9 @@ class _MainTabScreenState extends State<MainTabScreen> {
   }
 
   Future<void> _loadDeviceHwidAndLicense() async {
-    // Riprova fino a 3 volte se il channel non risponde (avvio freddo iOS)
-    for (int attempt = 0; attempt < 3; attempt++) {
+    // Attendi che il channel sia pronto (SceneDelegate: la window si connette dopo didFinishLaunch)
+    // Riprova fino a 5 volte con intervallo crescente
+    for (int attempt = 0; attempt < 5; attempt++) {
       try {
         final hwid = await _audioChannel.invokeMethod<String>('getDeviceHwid');
         final savedKey = await _audioChannel.invokeMethod<String>('getSavedLicense');
@@ -130,11 +131,12 @@ class _MainTabScreenState extends State<MainTabScreen> {
           }
         });
         return; // successo
-      } catch (_) {
-        if (attempt == 2) {
-          if (mounted) setState(() { _deviceHwid = '584ef757835d045d9e504e0303ba70b6'; });
+      } catch (e) {
+        final wait = Duration(milliseconds: 300 * (attempt + 1));
+        if (attempt < 4) {
+          await Future.delayed(wait);
         } else {
-          await Future.delayed(const Duration(milliseconds: 300));
+          if (mounted) setState(() { _deviceHwid = '584ef757835d045d9e504e0303ba70b6'; });
         }
       }
     }
