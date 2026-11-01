@@ -53,6 +53,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
   double _ttsVolume = 1.0;
   bool _enableVoice = true;
   bool _enableChime = true;
+  String _voiceGender = 'female'; // 'female' | 'male'
   int _stepsSinceLastDetection = 0; // Filtro anti-allucinazione avanzato
 
   // Stato aggiornamento in-app
@@ -173,7 +174,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
       } else if (word.contains('LAMENTO')) {
         toSpeak = 'ohhh... nooo...';
       }
-      _audioChannel.invokeMethod('speak', {'text': toSpeak, 'volume': _ttsVolume});
+      _audioChannel.invokeMethod('speak', {'text': toSpeak, 'volume': _ttsVolume, 'gender': _voiceGender});
     } catch (_) {}
   }
 
@@ -220,8 +221,8 @@ class _MainTabScreenState extends State<MainTabScreen> {
         // 1. Finestra di scansione minima (minimo 18 step RF senza interruzioni)
         // 2. Probabilità tarata per evitare falsi positivi continui
         _stepsSinceLastDetection++;
-        if (_stepsSinceLastDetection > 18) {
-          if (Random().nextDouble() < 0.004) {
+        if (_stepsSinceLastDetection > 30) {
+          if (Random().nextDouble() < 0.0015) {
             _stepsSinceLastDetection = 0;
             _triggerAnomaly();
           }

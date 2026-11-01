@@ -93,10 +93,11 @@ import CommonCrypto
 
       case "speak":
         let args = call.arguments as? [String: Any]
-        let text = args?["text"] as? String ?? ""
-        let vol  = (args?["volume"] as? Double).map { Float($0) } ?? 1.0
-        self.log("speak → \"\(text)\"")
-        self.speak(text: text, vol: vol)
+        let text   = args?["text"] as? String ?? ""
+        let vol    = (args?["volume"] as? Double).map { Float($0) } ?? 1.0
+        let gender = args?["gender"] as? String ?? "female"
+        self.log("speak → \"\(text)\" gender=\(gender)")
+        self.speak(text: text, vol: vol, gender: gender)
         result(true)
 
       case "playBeep":
@@ -149,21 +150,29 @@ import CommonCrypto
   // ──────────────────────────────────────────────────────────────────
   // TTS
   // ──────────────────────────────────────────────────────────────────
-  private func speak(text: String, vol: Float) {
+  private func speak(text: String, vol: Float, gender: String = "female") {
     try? AVAudioSession.sharedInstance().setActive(true)
     if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
 
     let utt = AVSpeechUtterance(string: text)
     let voices = AVSpeechSynthesisVoice.speechVoices()
-    if let v = voices.first(where: { $0.language == "it-IT" }) {
-      utt.voice = v; log("TTS voce: \(v.name)")
+
+    // Cerca voce italiana del genere richiesto
+    let wantedGender: AVSpeechSynthesisVoiceGender = gender == "male" ? .male : .female
+    if let v = voices.first(where: { $0.language == "it-IT" && $0.gender == wantedGender }) {
+      utt.voice = v; log("TTS voce: \(v.name) [\(gender)]")
+    } else if let v = voices.first(where: { $0.language == "it-IT" }) {
+      // Fallback: qualsiasi voce italiana
+      utt.voice = v; log("TTS voce fallback it-IT: \(v.name)")
+    } else if let v = voices.first(where: { $0.language.hasPrefix("en") && $0.gender == wantedGender }) {
+      utt.voice = v; log("TTS fallback en [\(gender)]: \(v.name)")
     } else if let v = voices.first(where: { $0.language.hasPrefix("en") }) {
-      utt.voice = v; log("TTS fallback: \(v.name)")
+      utt.voice = v; log("TTS fallback en: \(v.name)")
     } else {
-      log("TTS: nessuna voce specifica, sistema")
+      log("TTS: nessuna voce specifica, uso sistema")
     }
     utt.rate            = AVSpeechUtteranceDefaultSpeechRate * 0.85
-    utt.pitchMultiplier = 0.95
+    utt.pitchMultiplier = gender == "male" ? 0.80 : 1.10  // tono più basso per maschile, più alto per femminile
     utt.volume          = max(0.1, min(1.0, vol))
     synth.speak(utt)
     log("TTS speak() eseguito, isSpeaking=\(synth.isSpeaking)")
