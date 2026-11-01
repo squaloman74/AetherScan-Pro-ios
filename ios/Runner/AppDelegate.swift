@@ -100,24 +100,29 @@ import CommonCrypto
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
-  // MARK: - Audio Session (solo per beep/chime, NON per TTS)
+  // MARK: - Audio Session
   private func setupBeepAudioSession() {
     do {
-      // .ambient: compatibile con TTS, non interferisce con AVSpeechSynthesizer
-      try AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.allowBluetooth])
+      // .playback + .spokenAudio: override del tasto silent iPhone, indispensabile per TTS e beep
+      // SENZA .duckOthers — quella opzione bloccava AVSpeechSynthesizer su iOS 17+
+      try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth])
       try AVAudioSession.sharedInstance().setActive(true)
     } catch {
       print("AudioSession setup error: \(error)")
     }
   }
 
-  // MARK: - TTS (AVSpeechSynthesizer gestisce da solo la sessione su iOS 17+)
+  // MARK: - TTS
   private func speakText(text: String, volume: Float) {
+    // Riattiva sessione prima di parlare (potrebbe essere stata disattivata da altre app)
+    do {
+      try AVAudioSession.sharedInstance().setActive(true)
+    } catch {}
+
     if synth.isSpeaking {
       synth.stopSpeaking(at: .immediate)
     }
     let utt = AVSpeechUtterance(string: text)
-    // Voce italiana se disponibile, altrimenti sistema
     utt.voice = AVSpeechSynthesisVoice(language: "it-IT")
                ?? AVSpeechSynthesisVoice(language: "en-US")
     utt.rate            = AVSpeechUtteranceDefaultSpeechRate * 0.85
