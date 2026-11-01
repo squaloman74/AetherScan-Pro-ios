@@ -61,6 +61,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
   String _updateStatusText = 'Versione: v26 Beta 1 (Build 2026.11.01)';
   bool _updateAvailable = false;
   String? _pendingIpaUrl;
+  String _audioDiagnosticResult = ''; // risultato diagnostica audio
 
   final List<String> _phonemes = [
     // Nomi di persona
@@ -172,6 +173,15 @@ class _MainTabScreenState extends State<MainTabScreen> {
       }
       _audioChannel.invokeMethod('speak', {'text': toSpeak, 'volume': _ttsVolume});
     } catch (_) {}
+  }
+
+  Future<void> _runAudioDiagnostic() async {
+    try {
+      final result = await _audioChannel.invokeMethod<String>('audioDiagnostic');
+      setState(() => _audioDiagnosticResult = result ?? 'Nessun risultato');
+    } catch (e) {
+      setState(() => _audioDiagnosticResult = 'ERRORE: $e');
+    }
   }
 
   void _toggleScan() {
@@ -1215,7 +1225,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Volume Voce Android:', style: TextStyle(color: Color(0xFF8CA2BA), fontSize: 11)),
+                    const Text('Volume Voce:', style: TextStyle(color: Color(0xFF8CA2BA), fontSize: 11)),
                     Text('${(_ttsVolume * 100).round()}%', style: const TextStyle(color: Color(0xFF00EFFF), fontWeight: FontWeight.bold, fontFamily: 'monospace')),
                   ],
                 ),
@@ -1235,6 +1245,31 @@ class _MainTabScreenState extends State<MainTabScreen> {
                     child: const Text('🔊 TESTA VOCE', style: TextStyle(color: Color(0xFF00EFFF), fontWeight: FontWeight.bold, fontSize: 11)),
                   ),
                 ),
+                const SizedBox(height: 6),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0x2200FF88), side: const BorderSide(color: Color(0xFF00FF88))),
+                    onPressed: _runAudioDiagnostic,
+                    child: const Text('🔍 DIAGNOSTICA AUDIO', style: TextStyle(color: Color(0xFF00FF88), fontWeight: FontWeight.bold, fontSize: 11)),
+                  ),
+                ),
+                if (_audioDiagnosticResult.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0A1628),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0xFF1B3550)),
+                    ),
+                    child: SelectableText(
+                      _audioDiagnosticResult,
+                      style: const TextStyle(color: Color(0xFF00FF88), fontSize: 9.5, fontFamily: 'monospace'),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 10),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
