@@ -1,4 +1,4 @@
-name: Build AetherScan Pro iOS (IPA) - Beta 1
+﻿name: Build AetherScan Pro iOS (IPA) - Beta 1 (01/11/2026)
 
 on:
   push:
@@ -33,9 +33,9 @@ jobs:
         run: |
           mkdir -p Payload
           cp -r build/ios/iphoneos/Runner.app Payload/
-          zip -r AetherScan-Pro-v26-beta1-unsigned.ipa Payload
+          zip -r AetherScan-Pro-v26-beta1-01112026-unsigned.ipa Payload
           mkdir -p release-ios
-          mv AetherScan-Pro-v26-beta1-unsigned.ipa release-ios/
+          mv AetherScan-Pro-v26-beta1-01112026-unsigned.ipa release-ios/
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
@@ -47,18 +47,21 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v26-beta1
-          name: "AetherScan Pro v26 Beta 1"
+          name: "AetherScan Pro v26 Beta 1 - iOS (01/11/2026)"
           body: |
-            ## AetherScan Pro v26 Beta 1
+            ## AetherScan Pro v26 Beta 1 — iOS (IPA Unsigned)
+            **Data build:** 01/11/2026
 
-            ### Fix inclusi in questa versione:
-            - TTS iOS 17+ risolto: rimosso duckOthers, conflitto con AVSpeechSynthesizer
-            - Voice fallback: se voce italiana non scaricata usa inglese o voce sistema
-            - setActive() mirato: sessione audio attivata solo prima di parlare
-            - License persiste: synchronize() dopo salvataggio, evita perdita su force-quit
-            - Android TTS race condition: speech in coda se arriva prima di onInit
-            - Android TTS volume: rimosso parametro deprecato API 35+
-            - Bottone unificato: TESTA VOCE valido su iOS e Android
+            ### Fix e novità inclusi:
+            - ✅ Licenza persiste al riavvio app (UserDefaults.standard + retry 5x)
+            - ✅ Audio TTS funzionante (AVAudioSession .playback, bypassa modalità silenziosa)
+            - ✅ Sensore Prossimità: allerta quando qualcosa si avvicina al dispositivo
+            - ✅ Sensore EMF/Magnetometro: rilevazione anomalie campo magnetico
+            - ✅ Voce maschile/femminile selezionabile nelle impostazioni
+            - ✅ Tab Analisi: spettrogramma + heatmap termografica animata
+            - ✅ Parola EVP inline (no popup) + auto-salvataggio archivio
+            - ✅ Frequenza anomalie ridotta (più realistica, ~70s tra rilevazioni)
+            - ✅ Schermo sempre acceso durante scansione (isIdleTimerDisabled)
 
             ### Installazione
             Scarica l\'IPA e installa via Sideloadly o SideStore/AltStore.
