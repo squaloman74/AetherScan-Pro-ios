@@ -6,68 +6,71 @@ import CommonCrypto
 @main
 @objc class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
   private let channelName = "com.aetherscan.pro/audio"
-  private let userDefaultsLicenseKey = "saved_license_key"
-  
-  private let speechSynthesizer = AVSpeechSynthesizer()
+
+  // UserDefaults con suite dedicata — più affidabile di .standard su force-quit iOS 17+
+  private let defaults: UserDefaults = {
+    return UserDefaults(suiteName: "com.aetherscan.pro.prefs") ?? UserDefaults.standard
+  }()
+  private let licenseKey = "saved_license_key"
+
+  // Sintetizzatore vocale — entità separata, NON tocca AVAudioSession
+  private let synth = AVSpeechSynthesizer()
+  // Player per beep/chime — usa AVAudioSession solo per suoni non-vocali
   private var audioPlayer: AVAudioPlayer?
-  private var ttsVolume: Float = 1.0
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    speechSynthesizer.delegate = self
-    setupAudioSession()
-    
-    // FIX Beta 4: Schermo sempre acceso mentre l'app è aperta
+    synth.delegate = self
+
+    // Schermo sempre acceso
     UIApplication.shared.isIdleTimerDisabled = true
 
+    // Sessione audio per beep/chime (NON per TTS — AVSpeechSynthesizer gestisce da solo)
+    setupBeepAudioSession()
+
     if let controller = window?.rootViewController as? FlutterViewController {
-      let audioChannel = FlutterMethodChannel(name: channelName, binaryMessenger: controller.binaryMessenger)
-      
-      audioChannel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
+      let ch = FlutterMethodChannel(name: channelName, binaryMessenger: controller.binaryMessenger)
+
+      ch.setMethodCallHandler { [weak self] (call, result) in
         guard let self = self else { return }
-        
         switch call.method {
+
         case "getDeviceHwid":
-          let hwid = self.getDeviceHwid()
-          result(hwid)
-          
+          result(self.computeHwid())
+
         case "getSavedLicense":
-          let saved = UserDefaults.standard.string(forKey: self.userDefaultsLicenseKey) ?? ""
+          // Legge da suite dedicata — sempre disponibile subito
+          let saved = self.defaults.string(forKey: self.licenseKey) ?? ""
           result(saved)
-          
+
         case "saveLicense":
-          if let args = call.arguments as? [String: Any],
-             let key = args["licenseKey"] as? String {
-            UserDefaults.standard.set(key, forKey: self.userDefaultsLicenseKey)
-            UserDefaults.standard.synchronize() // FIX Beta 4.1: flush immediato, evita perdita su force-quit iOS 17+
-            result(true)
-          } else {
-            result(false)
-          }
-          
+          let args = call.arguments as? [String: Any]
+          let key = args?["licenseKey"] as? String ?? ""
+          self.defaults.set(key, forKey: self.licenseKey)
+          // synchronize() è deprecato ma garantisce flush immediato su iOS 17+
+          self.defaults.synchronize()
+          result(true)
+
         case "speak":
-          if let args = call.arguments as? [String: Any] {
-            let text = args["text"] as? String ?? ""
-            let vol = args["volume"] as? Double ?? 1.0
-            self.speakText(text: text, volume: Float(vol))
-          }
+          let args = call.arguments as? [String: Any]
+          let text = args?["text"] as? String ?? ""
+          let vol  = (args?["volume"] as? Double).map { Float($0) } ?? 1.0
+          self.speakText(text: text, volume: vol)
           result(true)
-          
+
         case "playBeep":
-          if let args = call.arguments as? [String: Any] {
-            let freq = args["freq"] as? Int ?? 880
-            let durationMs = args["durationMs"] as? Int ?? 100
-            self.playTone(freqHz: freq, durationMs: durationMs)
-          }
+          let args = call.arguments as? [String: Any]
+          let freq = args?["freq"] as? Int ?? 880
+          let dur  = args?["durationMs"] as? Int ?? 100
+          self.playTone(freqHz: freq, durationMs: dur)
           result(true)
-          
+
         case "playChime":
-          self.playChimeSound()
+          self.playChime()
           result(true)
-          
-        // FIX Beta 4: WakeLock dinamico controllabile da Flutter
+
         case "setWakeLock":
           let enabled = (call.arguments as? [String: Any])?["enabled"] as? Bool ?? true
           DispatchQueue.main.async {
@@ -75,14 +78,10 @@ import CommonCrypto
           }
           result(true)
 
-        // Beta 4: Apre URL in Safari / AltStore per installazione aggiornamenti
         case "openUrl":
-          if let args = call.arguments as? [String: Any],
-             let urlString = args["url"] as? String,
-             let url = URL(string: urlString) {
-            DispatchQueue.main.async {
-              UIApplication.shared.open(url, options: [:], completionHandler: nil)
-            }
+          let args = call.arguments as? [String: Any]
+          if let s = args?["url"] as? String, let url = URL(string: s) {
+            DispatchQueue.main.async { UIApplication.shared.open(url) }
             result(true)
           } else {
             result(false)
@@ -90,7 +89,7 @@ import CommonCrypto
 
         case "startStatic", "stopStatic":
           result(true)
-          
+
         default:
           result(FlutterMethodNotImplemented)
         }
@@ -101,108 +100,92 @@ import CommonCrypto
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
-  private func setupAudioSession() {
+  // MARK: - Audio Session (solo per beep/chime, NON per TTS)
+  private func setupBeepAudioSession() {
     do {
-      // FIX Beta 4.1: rimosso .duckOthers — conflitto con AVSpeechSynthesizer su iOS 17+
-      // setActive(true) spostato in speakText() per evitare conflitti all'avvio
-      try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth])
+      // .ambient: compatibile con TTS, non interferisce con AVSpeechSynthesizer
+      try AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.allowBluetooth])
+      try AVAudioSession.sharedInstance().setActive(true)
     } catch {
-      print("AVAudioSession error: \(error)")
+      print("AudioSession setup error: \(error)")
     }
   }
 
-  private func getDeviceHwid() -> String {
-    let vendorId = UIDevice.current.identifierForVendor?.uuidString ?? "IOS_UNKNOWN_DEVICE"
-    let raw = "IOS:\(vendorId)"
-    
-    guard let data = raw.data(using: .utf8) else { return "584ef757835d045d9e504e0303ba70b6" }
-    var digest = [UInt8](repeating: 0, count: Int(CC_MD5_DIGEST_LENGTH))
-    _ = data.withUnsafeBytes {
-      CC_MD5($0.baseAddress, CC_LONG(data.count), &digest)
+  // MARK: - TTS (AVSpeechSynthesizer gestisce da solo la sessione su iOS 17+)
+  private func speakText(text: String, volume: Float) {
+    if synth.isSpeaking {
+      synth.stopSpeaking(at: .immediate)
     }
+    let utt = AVSpeechUtterance(string: text)
+    // Voce italiana se disponibile, altrimenti sistema
+    utt.voice = AVSpeechSynthesisVoice(language: "it-IT")
+               ?? AVSpeechSynthesisVoice(language: "en-US")
+    utt.rate            = AVSpeechUtteranceDefaultSpeechRate * 0.85
+    utt.pitchMultiplier = 0.95
+    utt.volume          = max(0.1, min(1.0, volume))
+    synth.speak(utt)
+  }
+
+  // MARK: - Device HWID
+  private func computeHwid() -> String {
+    let id  = UIDevice.current.identifierForVendor?.uuidString ?? "IOS_UNKNOWN"
+    let raw = "IOS:\(id)"
+    guard let data = raw.data(using: .utf8) else { return "000000000000000000000000000000000" }
+    var digest = [UInt8](repeating: 0, count: Int(CC_MD5_DIGEST_LENGTH))
+    _ = data.withUnsafeBytes { CC_MD5($0.baseAddress, CC_LONG(data.count), &digest) }
     return digest.map { String(format: "%02x", $0) }.joined()
   }
 
-  private func speakText(text: String, volume: Float) {
-    // FIX Beta 4.1: attiva sessione audio subito prima di parlare (evita conflitti all'avvio)
-    try? AVAudioSession.sharedInstance().setActive(true)
-
-    if speechSynthesizer.isSpeaking {
-      speechSynthesizer.stopSpeaking(at: .immediate)
-    }
-    
-    let utterance = AVSpeechUtterance(string: text)
-    // FIX Beta 4.1: fallback chain se voce italiana non disponibile (non scaricata)
-    if let itVoice = AVSpeechSynthesisVoice(language: "it-IT") {
-      utterance.voice = itVoice
-    } else if let enVoice = AVSpeechSynthesisVoice(language: "en-US") {
-      utterance.voice = enVoice
-    }
-    // Se entrambi nil, AVSpeechSynthesizer usa la voce di sistema automaticamente
-    utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.85
-    utterance.pitchMultiplier = 0.95
-    utterance.volume = max(0.1, min(1.0, volume))
-    speechSynthesizer.speak(utterance)
-  }
-
+  // MARK: - Beep / Chime (AVAudioPlayer, sessione .ambient)
   private func playTone(freqHz: Int, durationMs: Int) {
     DispatchQueue.global(qos: .userInitiated).async {
-      let sampleRate: Double = 22050.0
-      let numSamples = Int(sampleRate * Double(durationMs) / 1000.0)
-      var samples = [Int16]()
-      samples.reserveCapacity(numSamples)
-      
-      for i in 0..<numSamples {
-        let angle = 2.0 * Double.pi * Double(i) * Double(freqHz) / sampleRate
-        let env = 1.0 - (Double(i) / Double(numSamples))
-        let sample = Int16(sin(angle) * Double(Int16.max) * 0.4 * env)
-        samples.append(sample)
+      let sr   = 22050.0
+      let n    = Int(sr * Double(durationMs) / 1000.0)
+      var buf  = [Int16]()
+      buf.reserveCapacity(n)
+      for i in 0..<n {
+        let angle = 2.0 * Double.pi * Double(i) * Double(freqHz) / sr
+        let env   = 1.0 - (Double(i) / Double(n))
+        buf.append(Int16(sin(angle) * Double(Int16.max) * 0.4 * env))
       }
-      
-      let data = samples.withUnsafeBufferPointer { Data(buffer: $0) }
-      let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: sampleRate, channels: 1, interleaved: false)!
-      
+      let pcm = buf.withUnsafeBufferPointer { Data(buffer: $0) }
       do {
-        let wavHeaderData = self.createWavData(pcmData: data, sampleRate: Int(sampleRate), channels: 1, bitsPerSample: 16)
-        self.audioPlayer = try AVAudioPlayer(data: wavHeaderData)
+        let wav = self.makeWav(pcm: pcm, sr: Int(sr))
+        self.audioPlayer = try AVAudioPlayer(data: wav)
         self.audioPlayer?.prepareToPlay()
         self.audioPlayer?.play()
       } catch {
-        print("Tone audioPlayer error: \(error)")
+        print("Tone error: \(error)")
       }
     }
   }
 
-  private func playChimeSound() {
+  private func playChime() {
     let freqs = [650, 950, 1300]
-    for (idx, f) in freqs.enumerated() {
-      DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + Double(idx) * 0.085) {
+    for (i, f) in freqs.enumerated() {
+      DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + Double(i) * 0.085) {
         self.playTone(freqHz: f, durationMs: 90)
       }
     }
   }
 
-  private func createWavData(pcmData: Data, sampleRate: Int, channels: Int, bitsPerSample: Int) -> Data {
-    var wav = Data()
-    let byteRate = sampleRate * channels * bitsPerSample / 8
-    let blockAlign = channels * bitsPerSample / 8
-    let subchunk2Size = pcmData.count
-    let chunkSize = 36 + subchunk2Size
-
-    wav.append(contentsOf: "RIFF".utf8)
-    wav.append(contentsOf: withUnsafeBytes(of: UInt32(chunkSize).littleEndian) { Array($0) })
-    wav.append(contentsOf: "WAVE".utf8)
-    wav.append(contentsOf: "fmt ".utf8)
-    wav.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian) { Array($0) })
-    wav.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })
-    wav.append(contentsOf: withUnsafeBytes(of: UInt16(channels).littleEndian) { Array($0) })
-    wav.append(contentsOf: withUnsafeBytes(of: UInt32(sampleRate).littleEndian) { Array($0) })
-    wav.append(contentsOf: withUnsafeBytes(of: UInt32(byteRate).littleEndian) { Array($0) })
-    wav.append(contentsOf: withUnsafeBytes(of: UInt16(blockAlign).littleEndian) { Array($0) })
-    wav.append(contentsOf: withUnsafeBytes(of: UInt16(bitsPerSample).littleEndian) { Array($0) })
-    wav.append(contentsOf: "data".utf8)
-    wav.append(contentsOf: withUnsafeBytes(of: UInt32(subchunk2Size).littleEndian) { Array($0) })
-    wav.append(pcmData)
-    return wav
+  // MARK: - WAV builder
+  private func makeWav(pcm: Data, sr: Int) -> Data {
+    var w = Data()
+    let ch    = 1, bps = 16
+    let br    = sr * ch * bps / 8
+    let ba    = ch * bps / 8
+    let sub2  = pcm.count
+    let chunk = 36 + sub2
+    func le32(_ v: Int) -> [UInt8] { withUnsafeBytes(of: UInt32(v).littleEndian) { Array($0) } }
+    func le16(_ v: Int) -> [UInt8] { withUnsafeBytes(of: UInt16(v).littleEndian) { Array($0) } }
+    w.append(contentsOf: "RIFF".utf8); w.append(contentsOf: le32(chunk))
+    w.append(contentsOf: "WAVE".utf8); w.append(contentsOf: "fmt ".utf8)
+    w.append(contentsOf: le32(16));    w.append(contentsOf: le16(1))
+    w.append(contentsOf: le16(ch));    w.append(contentsOf: le32(sr))
+    w.append(contentsOf: le32(br));    w.append(contentsOf: le16(ba))
+    w.append(contentsOf: le16(bps));   w.append(contentsOf: "data".utf8)
+    w.append(contentsOf: le32(sub2));  w.append(pcm)
+    return w
   }
 }

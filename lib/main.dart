@@ -106,25 +106,36 @@ class _MainTabScreenState extends State<MainTabScreen> {
   @override
   void initState() {
     super.initState();
-    _loadDeviceHwidAndLicense();
+    // Aspetta che il frame sia pronto prima di usare il MethodChannel
+    // Evita il bug iOS dove il channel non risponde durante initState()
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadDeviceHwidAndLicense();
+    });
   }
 
   Future<void> _loadDeviceHwidAndLicense() async {
-    try {
-      final hwid = await _audioChannel.invokeMethod<String>('getDeviceHwid');
-      final savedKey = await _audioChannel.invokeMethod<String>('getSavedLicense');
+    // Riprova fino a 3 volte se il channel non risponde (avvio freddo iOS)
+    for (int attempt = 0; attempt < 3; attempt++) {
+      try {
+        final hwid = await _audioChannel.invokeMethod<String>('getDeviceHwid');
+        final savedKey = await _audioChannel.invokeMethod<String>('getSavedLicense');
 
-      setState(() {
-        _deviceHwid = hwid ?? '584ef757835d045d9e504e0303ba70b6';
-        if (savedKey != null && savedKey.trim().isNotEmpty) {
-          _isDeviceAuthorized = true;
-          _licenseInputController.text = savedKey;
+        if (!mounted) return;
+        setState(() {
+          _deviceHwid = hwid ?? '584ef757835d045d9e504e0303ba70b6';
+          if (savedKey != null && savedKey.trim().isNotEmpty) {
+            _isDeviceAuthorized = true;
+            _licenseInputController.text = savedKey;
+          }
+        });
+        return; // successo
+      } catch (_) {
+        if (attempt == 2) {
+          if (mounted) setState(() { _deviceHwid = '584ef757835d045d9e504e0303ba70b6'; });
+        } else {
+          await Future.delayed(const Duration(milliseconds: 300));
         }
-      });
-    } catch (_) {
-      setState(() {
-        _deviceHwid = '584ef757835d045d9e504e0303ba70b6';
-      });
+      }
     }
   }
 
