@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,7 +15,7 @@ class AetherScanProApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'AetherScan Pro v26 Beta 3',
+      title: 'AetherScan Pro v26 Beta 4',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF060B12),
@@ -56,8 +58,9 @@ class _MainTabScreenState extends State<MainTabScreen> {
   // Stato aggiornamento in-app
   bool _isUpdating = false;
   double _updateProgress = 0.0;
-  String _updateStatusText = 'Versione: v26 Beta 3 (Build 2026.10.29)';
+  String _updateStatusText = 'Versione: v26 Beta 4 (Build 2026.11.01)';
   bool _updateAvailable = false;
+  String? _pendingIpaUrl;
 
   final List<String> _phonemes = [
     // Nomi di persona
@@ -178,6 +181,8 @@ class _MainTabScreenState extends State<MainTabScreen> {
 
   void _startScan() {
     _scanTimer?.cancel();
+    // FIX Beta 4: Mantieni schermo acceso durante la scansione
+    _audioChannel.invokeMethod('setWakeLock', {'enabled': true});
     _scanTimer = Timer.periodic(Duration(milliseconds: _speedMs.round()), (timer) {
       setState(() {
         if (_band == 'FM') {
@@ -205,6 +210,8 @@ class _MainTabScreenState extends State<MainTabScreen> {
   void _stopScan() {
     _scanTimer?.cancel();
     _scanTimer = null;
+    // FIX Beta 4: Ripristina timeout schermo quando la scansione si ferma
+    _audioChannel.invokeMethod('setWakeLock', {'enabled': false});
   }
 
   void _triggerAnomaly() {
@@ -484,20 +491,108 @@ class _MainTabScreenState extends State<MainTabScreen> {
   }
 
   // VERIFICA REALE AGGIORNAMENTI IN-APP (GITHUB OTA)
-  void _startInAppUpdate() {
+  Future<void> _startInAppUpdate() async {
     setState(() {
       _isUpdating = true;
-      _updateProgress = 0.0;
+      _updateProgress = 0.1;
       _updateAvailable = false;
-      _updateStatusText = 'Verifica in corso sul repository GitHub...';
+      _pendingIpaUrl = null;
+      _updateStatusText = 'Connessione a GitHub...';
     });
 
-    Timer(const Duration(milliseconds: 900), () {
+    try {
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 10);
+
+      final request = await client.getUrl(
+        Uri.parse('https://api.github.com/repos/squaloman74/AetherScan-Pro-ios/releases/latest'),
+      );
+      request.headers.set('User-Agent', 'AetherScan-Pro-v26');
+      request.headers.set('Accept', 'application/vnd.github.v3+json');
+
+      setState(() { _updateProgress = 0.4; _updateStatusText = 'Analisi release GitHub...'; });
+
+      final response = await request.close();
+      final body = await response.transform(utf8.decoder).join();
+      client.close();
+
+      if (response.statusCode == 404) {
+        setState(() {
+          _isUpdating = false;
+          _updateProgress = 0.0;
+          _updateStatusText = '⚠ Nessuna release trovata su GitHub.\nVersione corrente: v26 Beta 4';
+        });
+        return;
+      }
+
+      if (response.statusCode != 200) {
+        setState(() {
+          _isUpdating = false;
+          _updateProgress = 0.0;
+          _updateStatusText = '❌ Errore GitHub API (${response.statusCode})';
+        });
+        return;
+      }
+
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final tag = (data['tag_name'] as String? ?? '').toLowerCase();
+      final assets = data['assets'] as List<dynamic>? ?? [];
+      final releaseUrl = data['html_url'] as String?
+          ?? 'https://github.com/squaloman74/AetherScan-Pro-ios/releases';
+
+      String? ipaUrl;
+      for (final asset in assets) {
+        final name = (asset['name'] as String? ?? '').toLowerCase();
+        if (name.endsWith('.ipa')) {
+          ipaUrl = asset['browser_download_url'] as String?;
+          break;
+        }
+      }
+
+      setState(() { _updateProgress = 0.8; _updateStatusText = 'Confronto versioni...'; });
+
+      const currentBeta = 4;
+      final betaMatch = RegExp(r'beta[\-_]?(\d+)').firstMatch(tag);
+      final remoteBeta = betaMatch != null
+          ? int.tryParse(betaMatch.group(1) ?? '') ?? 0
+          : 0;
+
+      final isNewer = remoteBeta > currentBeta;
+
+      setState(() {
+        _isUpdating = false;
+        _updateProgress = 1.0;
+        if (isNewer) {
+          _updateAvailable = true;
+          _pendingIpaUrl = ipaUrl ?? releaseUrl;
+          _updateStatusText =
+              '⬆ AGGIORNAMENTO DISPONIBILE!\n'
+              'Release: ${data['tag_name']}\n'
+              'Premi INSTALLA per aggiornare via AltStore.';
+        } else {
+          _updateAvailable = false;
+          _updateStatusText = '✔ Sei aggiornato! Versione: v26 Beta 4 (Build 2026.11.01)';
+        }
+      });
+    } catch (e) {
+      final msg = e.toString();
       setState(() {
         _isUpdating = false;
         _updateProgress = 0.0;
-        _updateStatusText = '✔ La tua versione (v26 Beta 3) è aggiornata! Non servono nuovi aggiornamenti.';
+        _updateStatusText = '❌ Errore: ${msg.length > 90 ? msg.substring(0, 90) : msg}';
       });
+    }
+  }
+
+  void _openInstallUrl() {
+    final url = _pendingIpaUrl;
+    if (url == null) return;
+    final installUrl = url.endsWith('.ipa')
+        ? 'altstore://install?url=${Uri.encodeComponent(url)}'
+        : url;
+    _audioChannel.invokeMethod('openUrl', {'url': installUrl}).catchError((_) {
+      _audioChannel.invokeMethod('openUrl',
+          {'url': 'https://github.com/squaloman74/AetherScan-Pro-ios/releases'});
     });
   }
 
@@ -528,7 +623,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
                 children: [
                   TextSpan(text: 'AetherScan ', style: TextStyle(color: Colors.white)),
                   TextSpan(text: 'Pro ', style: TextStyle(color: Color(0xFF00EFFF))),
-                  TextSpan(text: 'v26 Beta 3', style: TextStyle(color: Color(0xFF8CA2BA), fontSize: 10)),
+                  TextSpan(text: 'v26 Beta 4', style: TextStyle(color: Color(0xFF8CA2BA), fontSize: 10)),
                 ],
               ),
             ),
@@ -1003,7 +1098,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
                   children: [
                     Icon(Icons.system_update, color: Color(0xFF00EFFF), size: 18),
                     SizedBox(width: 8),
-                    Text('RICERCA AGGIORNAMENTI (v26 Beta 3)', style: TextStyle(color: Color(0xFF00EFFF), fontWeight: FontWeight.bold, fontSize: 13)),
+                    Text('RICERCA AGGIORNAMENTI (v26 Beta 4)', style: TextStyle(color: Color(0xFF00EFFF), fontWeight: FontWeight.bold, fontSize: 13)),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -1034,6 +1129,19 @@ class _MainTabScreenState extends State<MainTabScreen> {
                     style: const TextStyle(color: Color(0xFF00FF88), fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.w600),
                   ),
                 ),
+                // BOTTONE INSTALLA — appare solo quando c'è un aggiornamento disponibile
+                if (_updateAvailable) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00FF44)),
+                      onPressed: _openInstallUrl,
+                      icon: const Icon(Icons.download_rounded, color: Colors.black),
+                      label: const Text('INSTALLA VIA ALTSTORE', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 13)),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

@@ -18,6 +18,9 @@ import CommonCrypto
   ) -> Bool {
     speechSynthesizer.delegate = self
     setupAudioSession()
+    
+    // FIX Beta 4: Schermo sempre acceso mentre l'app è aperta
+    UIApplication.shared.isIdleTimerDisabled = true
 
     if let controller = window?.rootViewController as? FlutterViewController {
       let audioChannel = FlutterMethodChannel(name: channelName, binaryMessenger: controller.binaryMessenger)
@@ -63,6 +66,27 @@ import CommonCrypto
           self.playChimeSound()
           result(true)
           
+        // FIX Beta 4: WakeLock dinamico controllabile da Flutter
+        case "setWakeLock":
+          let enabled = (call.arguments as? [String: Any])?["enabled"] as? Bool ?? true
+          DispatchQueue.main.async {
+            UIApplication.shared.isIdleTimerDisabled = enabled
+          }
+          result(true)
+
+        // Beta 4: Apre URL in Safari / AltStore per installazione aggiornamenti
+        case "openUrl":
+          if let args = call.arguments as? [String: Any],
+             let urlString = args["url"] as? String,
+             let url = URL(string: urlString) {
+            DispatchQueue.main.async {
+              UIApplication.shared.open(url, options: [:], completionHandler: nil)
+            }
+            result(true)
+          } else {
+            result(false)
+          }
+
         case "startStatic", "stopStatic":
           result(true)
           
@@ -78,7 +102,9 @@ import CommonCrypto
 
   private func setupAudioSession() {
     do {
-      try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.duckOthers])
+      // FIX Beta 4: .spokenAudio richiesto per AVSpeechSynthesizer su iOS 17+
+      // .default causava silenzio TTS su iPhone 17 / iOS 19
+      try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers, .allowBluetooth])
       try AVAudioSession.sharedInstance().setActive(true)
     } catch {
       print("AVAudioSession error: \(error)")
