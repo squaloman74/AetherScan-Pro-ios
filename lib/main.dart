@@ -121,6 +121,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
     // Evita il bug iOS dove il channel non risponde durante initState()
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadDeviceHwidAndLicense();
+      _startSensorListening();
     });
   }
 
@@ -194,6 +195,119 @@ class _MainTabScreenState extends State<MainTabScreen> {
     } catch (e) {
       setState(() => _audioDiagnosticResult = 'ERRORE: $e');
     }
+  }
+
+  // ── SENSORI EMF + PROSSIMITA — retry per race condition EventChannel ──
+  void _startSensorListening() { _startSensorWithRetry(0); }
+
+  Future<void> _startSensorWithRetry(int attempt) async {
+    if (attempt >= 6) return;
+    await Future.delayed(Duration(milliseconds: 1000 + attempt * 500));
+    if (!mounted) return;
+    try {
+      await _sensorSubscription?.cancel();
+      _sensorSubscription = _sensorChannel.receiveBroadcastStream().listen(
+        (dynamic event) {
+          if (event == null || !mounted) return;
+          final map = Map<String, dynamic>.from(event as Map);
+          final type = map['type'] as String? ?? '';
+          if (type == 'proximity') {
+            final near = map['near'] as bool? ?? false;
+            if (near && !_proximityAlert) {
+              final now = DateTime.now();
+              if (_lastProximityAlertTime == null ||
+                  now.difference(_lastProximityAlertTime!).inSeconds > 5) {
+                _lastProximityAlertTime = now;
+                _audioChannel.invokeMethod('playProximityAlert');
+                _showSensorAlert(
+                  'PRESENZA RILEVATA',
+                  'Qualcosa si e avvicinato al dispositivo!',
+                  const Color(0xFFFF3366),
+                );
+              }
+            }
+            if (mounted) setState(() => _proximityAlert = near);
+          } else if (type == 'emf') {
+            final value = (map['value'] as num?)?.toDouble() ?? 0.0;
+            final delta = (map['delta'] as num?)?.toDouble() ?? 0.0;
+            final spike = map['spike'] as bool? ?? false;
+            if (mounted) setState(() { _emfValue = value; _emfDelta = delta; });
+            if (spike && !_emfSpikeAlert) {
+              final now = DateTime.now();
+              if (_lastEmfAlertTime == null ||
+                  now.difference(_lastEmfAlertTime!).inSeconds > 8) {
+                _lastEmfAlertTime = now;
+                if (mounted) setState(() => _emfSpikeAlert = true);
+                _audioChannel.invokeMethod('playEmfAlert');
+                _showSensorAlert(
+                  'ANOMALIA EMF',
+                  'Campo magnetico anomalo: +${delta.toStringAsFixed(1)} uT',
+                  const Color(0xFFFFB700),
+                );
+              }
+            } else if (!spike && _emfSpikeAlert) {
+              if (mounted) setState(() => _emfSpikeAlert = false);
+            }
+          }
+        },
+        onError: (dynamic e) => _startSensorWithRetry(attempt + 1),
+        cancelOnError: false,
+      );
+    } catch (e) {
+      _startSensorWithRetry(attempt + 1);
+    }
+  }
+
+  void _showSensorAlert(String title, String message, Color color) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0F1A2A),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: color, width: 2),
+            boxShadow: [BoxShadow(color: color.withOpacity(0.3), blurRadius: 20, spreadRadius: 4)],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.sensors, color: color, size: 22),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(title, style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 1))),
+                  GestureDetector(onTap: () => Navigator.pop(ctx), child: const Icon(Icons.close, color: Color(0xFF4D6682), size: 18)),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Text(message, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: color),
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('CONFERMA', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _sensorSubscription?.cancel();
+    _scanTimer?.cancel();
+    _licenseInputController.dispose();
+    super.dispose();
   }
 
   void _toggleScan() {
