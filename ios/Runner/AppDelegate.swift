@@ -6,118 +6,109 @@ import CommonCrypto
 @main
 @objc class AppDelegate: FlutterAppDelegate, AVSpeechSynthesizerDelegate {
 
-  private let channelName  = "com.aetherscan.pro/audio"
-  private let licenseKey   = "aetherscan_pro_license"   // chiave stabile
-  private let synth        = AVSpeechSynthesizer()
-  private var audioPlayer  : AVAudioPlayer?
-  private var channelRegistered = false   // flag anti-doppia-registrazione
+  private let channelName       = "com.aetherscan.pro/audio"
+  private let licenseKey        = "aetherscan_pro_license"
+  private let synth             = AVSpeechSynthesizer()
+  private var audioPlayer       : AVAudioPlayer?
+  private var channelRegistered = false
 
   private func log(_ msg: String) { NSLog("[AETHER] %@", msg) }
 
-  // ─────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-
-    // 1. Plugin Flutter prima di super
     GeneratedPluginRegistrant.register(with: self)
-
-    // 2. super inizializza FlutterEngine e (per app non-scene) setta window
     let result = super.application(application, didFinishLaunchingWithOptions: launchOptions)
 
     synth.delegate = self
     UIApplication.shared.isIdleTimerDisabled = true
     setupAudioSession()
 
-    // 3. Tentativo immediato (funziona su app non-scene)
+    // Tentativo immediato (app senza SceneDelegate)
     registerChannel()
 
-    // 4. Retry quando l'app diventa attiva:
-    //    nelle app con SceneDelegate, window diventa disponibile DOPO
-    //    che la scena si connette — quindi applicationDidBecomeActive
-    //    è il momento giusto per un secondo tentativo.
+    // Con SceneDelegate la window diventa disponibile solo dopo
+    // che la scena si connette → ascoltiamo didBecomeActive
     NotificationCenter.default.addObserver(
       self,
-      selector: #selector(onAppActive),
+      selector: #selector(onAppBecameActive),
       name: UIApplication.didBecomeActiveNotification,
       object: nil
     )
-
     return result
   }
 
-  @objc private func onAppActive() {
-    registerChannel()
-  }
+  @objc private func onAppBecameActive() { registerChannel() }
 
-  // ─────────────────────────────────────────────────────────────────
-  // Registrazione channel — idempotente grazie a channelRegistered
-  // ─────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────
   private func registerChannel() {
     guard !channelRegistered else { return }
 
-    // Con SceneDelegate, window viene gestita dalla scena:
-    // proviamo prima la window dell'AppDelegate, poi quella della scena attiva
-    let flutterVC: FlutterViewController?
+    // Cerca il FlutterViewController: prima in window AppDelegate,
+    // poi nelle scene attive (SceneDelegate architecture)
+    var flutterVC: FlutterViewController?
 
     if let vc = window?.rootViewController as? FlutterViewController {
       flutterVC = vc
-    } else if let scene = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene })
-                .first(where: { $0.activationState == .foregroundActive }),
-              let vc = scene.windows.first?.rootViewController as? FlutterViewController {
-      flutterVC = vc
     } else {
-      log("window non pronta — channel rinviato a didBecomeActive")
+      for scene in UIApplication.shared.connectedScenes {
+        guard let ws = scene as? UIWindowScene,
+              ws.activationState == .foregroundActive,
+              let vc = ws.windows.first?.rootViewController as? FlutterViewController
+        else { continue }
+        flutterVC = vc
+        break
+      }
+    }
+
+    guard let vc = flutterVC else {
+      log("window non ancora pronta — attendo didBecomeActive")
       return
     }
 
     channelRegistered = true
-    log("Channel registrato su FlutterViewController")
+    log("MethodChannel registrato correttamente")
 
-    let ch = FlutterMethodChannel(
-      name: channelName,
-      binaryMessenger: flutterVC.binaryMessenger
-    )
-
-    ch.setMethodCallHandler { [weak self] (call, result) in
+    let ch = FlutterMethodChannel(name: channelName, binaryMessenger: vc.binaryMessenger)
+    ch.setMethodCallHandler { [weak self] call, result in
       guard let self = self else { return }
       switch call.method {
 
-      // ── LICENZA ────────────────────────────────────────────────
       case "getDeviceHwid":
-        result(self.hwid())
+        result(self.computeHwid())
 
       case "getSavedLicense":
         let v = UserDefaults.standard.string(forKey: self.licenseKey) ?? ""
-        self.log("getSavedLicense → \(v.isEmpty ? "VUOTA" : "TROVATA (\(v.count) chars)")")
+        self.log("getSavedLicense → \(v.isEmpty ? "VUOTA" : "OK (\(v.count) chars)")")
         result(v)
 
       case "saveLicense":
         let k = (call.arguments as? [String: Any])?["licenseKey"] as? String ?? ""
         UserDefaults.standard.set(k, forKey: self.licenseKey)
         UserDefaults.standard.synchronize()
-        self.log("saveLicense → '\(k.prefix(10))…' salvata")
+        self.log("saveLicense → \(k.count) chars salvati")
         result(true)
 
-      // ── AUDIO ──────────────────────────────────────────────────
       case "speak":
         let args = call.arguments as? [String: Any]
         let text = args?["text"] as? String ?? ""
         let vol  = (args?["volume"] as? Double).map { Float($0) } ?? 1.0
-        self.log("speak → '\(text)'")
+        self.log("speak → \"\(text)\"")
         self.speak(text: text, vol: vol)
         result(true)
 
       case "playBeep":
         let args = call.arguments as? [String: Any]
-        self.playTone(hz: args?["freq"] as? Int ?? 880,
-                      ms: args?["durationMs"] as? Int ?? 100)
+        let hz = args?["freq"] as? Int ?? 880
+        let ms = args?["durationMs"] as? Int ?? 100
+        self.playTone(hz: hz, ms: ms)
         result(true)
 
       case "playChime":
-        self.playChime(); result(true)
+        self.playChime()
+        result(true)
 
       case "setWakeLock":
         let on = (call.arguments as? [String: Any])?["enabled"] as? Bool ?? true
@@ -125,14 +116,13 @@ import CommonCrypto
         result(true)
 
       case "openUrl":
-        if let s = (call.arguments as? [String: Any])?["url"] as? String,
-           let u = URL(string: s) {
-          DispatchQueue.main.async { UIApplication.shared.open(u) }
-          result(true)
-        } else { result(false) }
+        guard let s = (call.arguments as? [String: Any])?["url"] as? String,
+              let u = URL(string: s) else { result(false); return }
+        DispatchQueue.main.async { UIApplication.shared.open(u) }
+        result(true)
 
       case "audioDiagnostic":
-        result(self.diagnostic())
+        result(self.buildDiagnostic())
 
       case "startStatic", "stopStatic":
         result(true)
@@ -143,113 +133,150 @@ import CommonCrypto
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────
-  // Audio Session — .playback bypassa silent-switch su app sideloaded
-  // ─────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────
+  // Audio Session
+  // ──────────────────────────────────────────────────────────────────
   private func setupAudioSession() {
     do {
       try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
       try AVAudioSession.sharedInstance().setActive(true)
-      log("AudioSession OK → .playback")
-    } catch { log("AudioSession ERRORE: \(error)") }
+      log("AudioSession .playback attiva")
+    } catch {
+      log("AudioSession errore: \(error.localizedDescription)")
+    }
   }
 
-  // ─────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────
   // TTS
-  // ─────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────
   private func speak(text: String, vol: Float) {
     try? AVAudioSession.sharedInstance().setActive(true)
     if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
 
-    let u = AVSpeechUtterance(string: text)
-    let allVoices = AVSpeechSynthesisVoice.speechVoices()
-    if let v = allVoices.first(where: { $0.language == "it-IT" }) {
-      u.voice = v; log("TTS voce: \(v.name)")
-    } else if let v = allVoices.first(where: { $0.language.hasPrefix("en") }) {
-      u.voice = v; log("TTS fallback en: \(v.name)")
-    } else { log("TTS: nessuna voce specifica, uso sistema") }
-
-    u.rate = AVSpeechUtteranceDefaultSpeechRate * 0.85
-    u.pitchMultiplier = 0.95
-    u.volume = max(0.1, min(1.0, vol))
-    synth.speak(u)
-    log("TTS synth.speak() eseguito, isSpeaking=\(synth.isSpeaking)")
+    let utt = AVSpeechUtterance(string: text)
+    let voices = AVSpeechSynthesisVoice.speechVoices()
+    if let v = voices.first(where: { $0.language == "it-IT" }) {
+      utt.voice = v; log("TTS voce: \(v.name)")
+    } else if let v = voices.first(where: { $0.language.hasPrefix("en") }) {
+      utt.voice = v; log("TTS fallback: \(v.name)")
+    } else {
+      log("TTS: nessuna voce specifica, sistema")
+    }
+    utt.rate            = AVSpeechUtteranceDefaultSpeechRate * 0.85
+    utt.pitchMultiplier = 0.95
+    utt.volume          = max(0.1, min(1.0, vol))
+    synth.speak(utt)
+    log("TTS speak() eseguito, isSpeaking=\(synth.isSpeaking)")
   }
 
-  func speechSynthesizer(_ s: AVSpeechSynthesizer, didStart u: AVSpeechUtterance)  { log("TTS STARTED") }
-  func speechSynthesizer(_ s: AVSpeechSynthesizer, didFinish u: AVSpeechUtterance) { log("TTS FINISHED") }
-  func speechSynthesizer(_ s: AVSpeechSynthesizer, didCancel u: AVSpeechUtterance) { log("TTS CANCELLED") }
+  func speechSynthesizer(_ s: AVSpeechSynthesizer, didStart _: AVSpeechUtterance)  { log("TTS STARTED") }
+  func speechSynthesizer(_ s: AVSpeechSynthesizer, didFinish _: AVSpeechUtterance) { log("TTS FINISHED") }
+  func speechSynthesizer(_ s: AVSpeechSynthesizer, didCancel _: AVSpeechUtterance) { log("TTS CANCELLED") }
 
-  // ─────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────
   // Diagnostica
-  // ─────────────────────────────────────────────────────────────────
-  private func diagnostic() -> String {
-    let s  = AVAudioSession.sharedInstance()
-    let out = s.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ",")
-    let voc = AVSpeechSynthesisVoice.speechVoices()
-               .filter { $0.language.hasPrefix("it") }
-               .map { $0.name }.joined(separator: ", ")
-    let key = UserDefaults.standard.string(forKey: licenseKey) ?? ""
-    let r = """
-=== DIAGNOSTICA ===
+  // ──────────────────────────────────────────────────────────────────
+  private func buildDiagnostic() -> String {
+    let session = AVAudioSession.sharedInstance()
+    let route   = session.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ",")
+    let voci    = AVSpeechSynthesisVoice.speechVoices()
+                    .filter { $0.language.hasPrefix("it") }
+                    .map { $0.name }.joined(separator: ", ")
+    let saved   = UserDefaults.standard.string(forKey: licenseKey) ?? ""
+    let report  = """
+=== DIAGNOSTICA AETHERSCAN ===
 Channel registrato: \(channelRegistered)
-Audio: \(s.category.rawValue) → \(out.isEmpty ? "NESSUN OUTPUT" : out)
-Volume: \(s.outputVolume)
-Voci IT: \(voc.isEmpty ? "NESSUNA" : voc)
-TTS attivo: \(synth.isSpeaking)
-Licenza: \(key.isEmpty ? "NON SALVATA" : "OK (\(key.count) chars)")
+Audio categoria: \(session.category.rawValue)
+Audio output: \(route.isEmpty ? "NESSUNO" : route)
+Volume sistema: \(session.outputVolume)
+Voci IT installate: \(voci.isEmpty ? "NESSUNA" : voci)
+TTS in corso: \(synth.isSpeaking)
+Licenza salvata: \(saved.isEmpty ? "NO" : "SI (\(saved.count) chars)")
 """
-    log(r); return r
+    log(report)
+    return report
   }
 
-  // ─────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────
   // HWID
-  // ─────────────────────────────────────────────────────────────────
-  private func hwid() -> String {
+  // ──────────────────────────────────────────────────────────────────
+  private func computeHwid() -> String {
     let raw = "IOS:\(UIDevice.current.identifierForVendor?.uuidString ?? "UNKNOWN")"
     guard let data = raw.data(using: .utf8) else { return String(repeating: "0", count: 32) }
-    var d = [UInt8](repeating: 0, count: Int(CC_MD5_DIGEST_LENGTH))
-    _ = data.withUnsafeBytes { CC_MD5($0.baseAddress, CC_LONG(data.count), &d) }
-    return d.map { String(format: "%02x", $0) }.joined()
+    var digest = [UInt8](repeating: 0, count: Int(CC_MD5_DIGEST_LENGTH))
+    _ = data.withUnsafeBytes { CC_MD5($0.baseAddress, CC_LONG(data.count), &digest) }
+    return digest.map { String(format: "%02x", $0) }.joined()
   }
 
-  // ─────────────────────────────────────────────────────────────────
-  // Beep / Chime
-  // ─────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────
+  // Beep / Chime — AVAudioPlayer con PCM generato
+  // ──────────────────────────────────────────────────────────────────
   private func playTone(hz: Int, ms: Int) {
     DispatchQueue.global(qos: .userInitiated).async {
-      let sr = 22050.0, n = Int(sr * Double(ms) / 1000.0)
-      var buf = [Int16](); buf.reserveCapacity(n)
+      let sr  = 22050.0
+      let n   = Int(sr * Double(ms) / 1000.0)
+      var buf = [Int16]()
+      buf.reserveCapacity(n)
       for i in 0..<n {
-        let a = 2.0 * Double.pi * Double(i) * Double(hz) / sr
-        let e = 1.0 - Double(i) / Double(n)
-        buf.append(Int16(sin(a) * Double(Int16.max) * 0.4 * e))
+        let angle = 2.0 * Double.pi * Double(i) * Double(hz) / sr
+        let env   = 1.0 - Double(i) / Double(n)
+        buf.append(Int16(sin(angle) * Double(Int16.max) * 0.4 * env))
       }
       let pcm = buf.withUnsafeBufferPointer { Data(buffer: $0) }
       do {
-        self.audioPlayer = try AVAudioPlayer(data: self.wav(pcm: pcm, sr: Int(sr)))
+        let wavData = self.buildWav(pcm: pcm, sampleRate: Int(sr))
+        self.audioPlayer = try AVAudioPlayer(data: wavData)
         self.audioPlayer?.prepareToPlay()
-        self.log("playTone \(hz)Hz → play=\(self.audioPlayer?.play() ?? false)")
-      } catch { self.log("playTone ERR: \(error)") }
+        let ok = self.audioPlayer?.play() ?? false
+        self.log("playTone \(hz)Hz → play()=\(ok)")
+      } catch {
+        self.log("playTone errore: \(error.localizedDescription)")
+      }
     }
   }
 
   private func playChime() {
-    for (i, f) in [650, 950, 1300].enumerated() {
+    for (i, freq) in [650, 950, 1300].enumerated() {
       DispatchQueue.global(qos: .userInitiated)
-        .asyncAfter(deadline: .now() + Double(i) * 0.085) { self.playTone(hz: f, ms: 90) }
+        .asyncAfter(deadline: .now() + Double(i) * 0.085) {
+          self.playTone(hz: freq, ms: 90)
+        }
     }
   }
 
-  private func wav(pcm: Data, sr: Int) -> Data {
-    var w = Data()
-    func u32(_ v: Int) -> [UInt8] { withUnsafeBytes(of: UInt32(v).littleEndian) { Array($0) } }
-    func u16(_ v: Int) -> [UInt8] { withUnsafeBytes(of: UInt16(v).littleEndian) { Array($0) } }
-    w += "RIFF".utf8; w += u32(36 + pcm.count)
-    w += "WAVE".utf8; w += "fmt ".utf8
-    w += u32(16); w += u16(1); w += u16(1)
-    w += u32(sr); w += u32(sr * 2); w += u16(2); w += u16(16)
-    w += "data".utf8; w += u32(pcm.count); w += pcm
-    return w
+  // ──────────────────────────────────────────────────────────────────
+  // WAV builder — usa append(contentsOf:) esplicito (compila sempre)
+  // ──────────────────────────────────────────────────────────────────
+  private func buildWav(pcm: Data, sampleRate: Int) -> Data {
+    let channels    = 1
+    let bitsPerSamp = 16
+    let byteRate    = sampleRate * channels * bitsPerSamp / 8
+    let blockAlign  = channels * bitsPerSamp / 8
+    let dataSize    = pcm.count
+    let chunkSize   = 36 + dataSize
+
+    var wav = Data()
+    wav.append(contentsOf: [UInt8]("RIFF".utf8))
+    wav.append(contentsOf: le32(chunkSize))
+    wav.append(contentsOf: [UInt8]("WAVE".utf8))
+    wav.append(contentsOf: [UInt8]("fmt ".utf8))
+    wav.append(contentsOf: le32(16))
+    wav.append(contentsOf: le16(1))          // PCM
+    wav.append(contentsOf: le16(channels))
+    wav.append(contentsOf: le32(sampleRate))
+    wav.append(contentsOf: le32(byteRate))
+    wav.append(contentsOf: le16(blockAlign))
+    wav.append(contentsOf: le16(bitsPerSamp))
+    wav.append(contentsOf: [UInt8]("data".utf8))
+    wav.append(contentsOf: le32(dataSize))
+    wav.append(pcm)
+    return wav
+  }
+
+  private func le32(_ v: Int) -> [UInt8] {
+    withUnsafeBytes(of: UInt32(v).littleEndian) { Array($0) }
+  }
+  private func le16(_ v: Int) -> [UInt8] {
+    withUnsafeBytes(of: UInt16(v).littleEndian) { Array($0) }
   }
 }
