@@ -41,6 +41,7 @@ import CommonCrypto
           if let args = call.arguments as? [String: Any],
              let key = args["licenseKey"] as? String {
             UserDefaults.standard.set(key, forKey: self.userDefaultsLicenseKey)
+            UserDefaults.standard.synchronize() // FIX Beta 4.1: flush immediato, evita perdita su force-quit iOS 17+
             result(true)
           } else {
             result(false)
@@ -102,10 +103,9 @@ import CommonCrypto
 
   private func setupAudioSession() {
     do {
-      // FIX Beta 4: .spokenAudio richiesto per AVSpeechSynthesizer su iOS 17+
-      // .default causava silenzio TTS su iPhone 17 / iOS 19
-      try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers, .allowBluetooth])
-      try AVAudioSession.sharedInstance().setActive(true)
+      // FIX Beta 4.1: rimosso .duckOthers — conflitto con AVSpeechSynthesizer su iOS 17+
+      // setActive(true) spostato in speakText() per evitare conflitti all'avvio
+      try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth])
     } catch {
       print("AVAudioSession error: \(error)")
     }
@@ -124,12 +124,21 @@ import CommonCrypto
   }
 
   private func speakText(text: String, volume: Float) {
+    // FIX Beta 4.1: attiva sessione audio subito prima di parlare (evita conflitti all'avvio)
+    try? AVAudioSession.sharedInstance().setActive(true)
+
     if speechSynthesizer.isSpeaking {
       speechSynthesizer.stopSpeaking(at: .immediate)
     }
     
     let utterance = AVSpeechUtterance(string: text)
-    utterance.voice = AVSpeechSynthesisVoice(language: "it-IT") ?? AVSpeechSynthesisVoice(language: "en-US")
+    // FIX Beta 4.1: fallback chain se voce italiana non disponibile (non scaricata)
+    if let itVoice = AVSpeechSynthesisVoice(language: "it-IT") {
+      utterance.voice = itVoice
+    } else if let enVoice = AVSpeechSynthesisVoice(language: "en-US") {
+      utterance.voice = enVoice
+    }
+    // Se entrambi nil, AVSpeechSynthesizer usa la voce di sistema automaticamente
     utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.85
     utterance.pitchMultiplier = 0.95
     utterance.volume = max(0.1, min(1.0, volume))

@@ -1,4 +1,4 @@
-name: Build AetherScan Pro iOS (IPA) - Beta 4
+name: Build AetherScan Pro iOS (IPA) - Beta 4.1
 
 on:
   push:
@@ -33,9 +33,9 @@ jobs:
         run: |
           mkdir -p Payload
           cp -r build/ios/iphoneos/Runner.app Payload/
-          zip -r AetherScan-Pro-v26-beta4-unsigned.ipa Payload
+          zip -r AetherScan-Pro-v26-beta4.1-unsigned.ipa Payload
           mkdir -p release-ios
-          mv AetherScan-Pro-v26-beta4-unsigned.ipa release-ios/
+          mv AetherScan-Pro-v26-beta4.1-unsigned.ipa release-ios/
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
@@ -46,18 +46,22 @@ jobs:
       - name: Create GitHub Release with IPA
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v26-beta4
-          name: "AetherScan Pro v26 Beta 4"
+          tag_name: v26-beta4.1
+          name: "AetherScan Pro v26 Beta 4.1"
           body: |
-            ## AetherScan Pro v26 Beta 4
-            
+            ## AetherScan Pro v26 Beta 4.1
+
             ### Fix inclusi in questa versione:
-            - 🔊 **Audio TTS risolto** — voci pronunciate correttamente su iOS 17/18/19
-            - 📵 **Display sempre acceso** durante la scansione
-            - ⬆️ **Update checker reale** — verifica aggiornamenti da GitHub e installa via AltStore
-            
+            - TTS iOS 17+ risolto: rimosso duckOthers, conflitto con AVSpeechSynthesizer
+            - Voice fallback: se voce italiana non scaricata usa inglese o voce sistema
+            - setActive() mirato: sessione audio attivata solo prima di parlare
+            - License persiste: synchronize() dopo salvataggio, evita perdita su force-quit
+            - Android TTS race condition: speech in coda se arriva prima di onInit
+            - Android TTS volume: rimosso parametro deprecato API 35+
+            - Bottone unificato: TESTA VOCE valido su iOS e Android
+
             ### Installazione
-            Scarica l'IPA e installa via **Sideloadly** o **SideStore/AltStore**.
+            Scarica l\'IPA e installa via Sideloadly o SideStore/AltStore.
           files: release-ios/*.ipa
           draft: false
           prerelease: true
