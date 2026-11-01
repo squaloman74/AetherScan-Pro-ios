@@ -1352,3 +1352,54 @@ class SpectrumPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
+
+// --- HEATMAP TERMOGRAFICA ---
+class ThermoHeatmapPainter extends CustomPainter {
+  final bool isScanning;
+  final bool anomaly;
+  ThermoHeatmapPainter({required this.isScanning, required this.anomaly});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rnd = Random();
+    const cols = 40;
+    const rows = 18;
+    final cellW = size.width / cols;
+    final cellH = size.height / rows;
+
+    for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+        double intensity;
+        if (!isScanning) {
+          intensity = 0.03 + rnd.nextDouble() * 0.07;
+        } else if (anomaly) {
+          final dx = (c - cols / 2).abs() / (cols / 2);
+          final dy = (r - rows / 2).abs() / (rows / 2);
+          intensity = (1.0 - dx * 0.6 - dy * 0.4).clamp(0.0, 1.0) * (0.7 + rnd.nextDouble() * 0.3);
+        } else {
+          final base = exp(-pow((c - cols / 2) / 12, 2)) * 0.5;
+          intensity = (base + rnd.nextDouble() * 0.25).clamp(0.0, 1.0);
+        }
+
+        final Color cellColor;
+        if (intensity < 0.2) {
+          cellColor = Color.lerp(const Color(0xFF020A14), const Color(0xFF0A3060), intensity / 0.2)!;
+        } else if (intensity < 0.45) {
+          cellColor = Color.lerp(const Color(0xFF0A3060), const Color(0xFF00EFFF), (intensity - 0.2) / 0.25)!;
+        } else if (intensity < 0.65) {
+          cellColor = Color.lerp(const Color(0xFF00EFFF), const Color(0xFF00FF88), (intensity - 0.45) / 0.20)!;
+        } else if (intensity < 0.82) {
+          cellColor = Color.lerp(const Color(0xFF00FF88), const Color(0xFFFFB700), (intensity - 0.65) / 0.17)!;
+        } else {
+          cellColor = Color.lerp(const Color(0xFFFFB700), const Color(0xFFFF1144), (intensity - 0.82) / 0.18)!;
+        }
+
+        final paint = Paint()..color = cellColor;
+        canvas.drawRect(Rect.fromLTWH(c * cellW + 0.5, r * cellH + 0.5, cellW - 1, cellH - 1), paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
