@@ -1,4 +1,4 @@
-name: Build AetherScan Pro iOS (IPA)
+name: Build AetherScan Pro iOS (IPA) - Beta 4
 
 on:
   push:
@@ -30,12 +30,33 @@ jobs:
         run: |
           mkdir -p Payload
           cp -r build/ios/iphoneos/Runner.app Payload/
-          zip -r AetherScan-Pro-v26-beta3-unsigned.ipa Payload
+          zip -r AetherScan-Pro-v26-beta4-unsigned.ipa Payload
           mkdir -p release-ios
-          mv AetherScan-Pro-v26-beta3-unsigned.ipa release-ios/
+          mv AetherScan-Pro-v26-beta4-unsigned.ipa release-ios/
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: AetherScan-Pro-iOS-IPA
           path: release-ios/*.ipa
+
+      - name: Create GitHub Release with IPA
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v26-beta4
+          name: "AetherScan Pro v26 Beta 4"
+          body: |
+            ## AetherScan Pro v26 Beta 4
+            
+            ### Fix inclusi in questa versione:
+            - 🔊 **Audio TTS risolto** — voci pronunciate correttamente su iOS 17/18/19
+            - 📵 **Display sempre acceso** durante la scansione
+            - ⬆️ **Update checker reale** — verifica aggiornamenti da GitHub e installa via AltStore
+            
+            ### Installazione
+            Scarica l'IPA e installa via **Sideloadly** o **SideStore/AltStore**.
+          files: release-ios/*.ipa
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
