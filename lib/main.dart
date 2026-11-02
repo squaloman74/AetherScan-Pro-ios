@@ -540,9 +540,11 @@ class _MainTabScreenState extends State<MainTabScreen> {
     try {
       final client = HttpClient();
       client.connectionTimeout = const Duration(seconds: 10);
+      client.badCertificateCallback = (X509Certificate cert, String host, int port) => true;
 
+      final repoName = Platform.isAndroid ? 'AetherScan-Pro-apk' : 'AetherScan-Pro-ios';
       final request = await client.getUrl(
-        Uri.parse('https://api.github.com/repos/squaloman74/AetherScan-Pro-ios/releases/latest'),
+        Uri.parse('https://api.github.com/repos/squaloman74/$repoName/releases/latest'),
       );
       request.headers.set('User-Agent', 'AetherScan-Pro-v26');
       request.headers.set('Accept', 'application/vnd.github.v3+json');
@@ -580,7 +582,10 @@ class _MainTabScreenState extends State<MainTabScreen> {
       String? ipaUrl;
       for (final asset in assets) {
         final name = (asset['name'] as String? ?? '').toLowerCase();
-        if (name.endsWith('.ipa')) {
+        if (Platform.isAndroid && name.endsWith('.apk')) {
+          ipaUrl = asset['browser_download_url'] as String?;
+          break;
+        } else if (!Platform.isAndroid && name.endsWith('.ipa')) {
           ipaUrl = asset['browser_download_url'] as String?;
           break;
         }
@@ -605,7 +610,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
           _updateStatusText =
               '⬆ AGGIORNAMENTO DISPONIBILE!\n'
               'Release: ${data['tag_name']}\n'
-              'Premi INSTALLA per aggiornare via AltStore.';
+              'Premi il pulsante per scaricare l\'aggiornamento.';
         } else {
           _updateAvailable = false;
           _updateStatusText = '✔ Sei aggiornato! Versione: v26 Beta 1 (Build 2026.11.01)';
@@ -1256,7 +1261,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
                       style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00FF44)),
                       onPressed: _openInstallUrl,
                       icon: const Icon(Icons.download_rounded, color: Colors.black),
-                      label: const Text('INSTALLA VIA ALTSTORE', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 13)),
+                      label: Text(Platform.isAndroid ? 'SCARICA E AGGIORNA APK' : 'INSTALLA VIA ALTSTORE', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 13)),
                     ),
                   ),
                 ],
