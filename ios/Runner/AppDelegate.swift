@@ -12,6 +12,7 @@ import CoreMotion
   private let licenseKey        = "aetherscan_pro_license"
   private let synth             = AVSpeechSynthesizer()
   private var audioPlayer       : AVAudioPlayer?
+  private var creepyPlayer      : AVAudioPlayer?
   private var channelRegistered = false
 
   // Sensori
@@ -20,6 +21,12 @@ import CoreMotion
   private var lastProximityNear = false
   private var emfBaseline       : Double = -1
   private var emfSpikeActive    = false
+
+  // Rilevamento tocco / sfioramento (anti-falsi positivi impugnatura)
+  private var lastGravityX: Double = 0.0
+  private var lastGravityY: Double = 0.0
+  private var lastGravityZ: Double = -1.0
+  private var lastTouchTriggerTime: TimeInterval = 0
 
   private func log(_ msg: String) { NSLog("[AETHER] %@", msg) }
 
@@ -124,6 +131,10 @@ import CoreMotion
         self.playEmfAlert()
         result(true)
 
+      case "playCreepyLaugh":
+        self.playCreepyLaugh()
+        result(true)
+
       case "setWakeLock":
         let on = (call.arguments as? [String: Any])?["enabled"] as? Bool ?? true
         DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = on }
@@ -158,7 +169,8 @@ import CoreMotion
     sensorEventSink = events
     startProximitySensor()
     startMagnetometer()
-    log("Sensori avviati: prossimita + EMF magnetometro")
+    startAccelerometer()
+    log("Sensori avviati: prossimita + EMF + tocco (accelerometro)")
     return nil
   }
 
@@ -170,7 +182,7 @@ import CoreMotion
   }
 
   // ──────────────────────────────────────────────────────────────────
-  // Sensore di Prossimita
+  // Sensore di Prossimita (Anteriore)
   // ──────────────────────────────────────────────────────────────────
   private func startProximitySensor() {
     UIDevice.current.isProximityMonitoringEnabled = true
@@ -189,6 +201,37 @@ import CoreMotion
     log("Prossimita: \(near ? "VICINO" : "LONTANO")")
     DispatchQueue.main.async {
       self.sensorEventSink?(["type": "proximity", "near": near])
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Sensore Accelerometro (Rilevamento Tocco / Contatto Posteriore e Frontale)
+  // ──────────────────────────────────────────────────────────────────
+  private func startAccelerometer() {
+    guard motionManager.isAccelerometerAvailable else {
+      log("Accelerometro non disponibile")
+      return
+    }
+    motionManager.accelerometerUpdateInterval = 0.05 // 20 Hz
+    motionManager.startAccelerometerUpdates(to: .main) { [weak self] data, _ in
+      guard let self = self, let data = data else { return }
+      let alpha = 0.85
+      self.lastGravityX = alpha * self.lastGravityX + (1.0 - alpha) * data.acceleration.x
+      self.lastGravityY = alpha * self.lastGravityY + (1.0 - alpha) * data.acceleration.y
+      self.lastGravityZ = alpha * self.lastGravityZ + (1.0 - alpha) * data.acceleration.z
+
+      let linearX = data.acceleration.x - self.lastGravityX
+      let linearY = data.acceleration.y - self.lastGravityY
+      let linearZ = data.acceleration.z - self.lastGravityZ
+      let impulse = sqrt(linearX*linearX + linearY*linearY + linearZ*linearZ)
+
+      // Soglia: 0.35 g (tocchetto secco/sfioramento, ma ignora movimento lento della mano)
+      let now = Date().timeIntervalSince1970
+      if impulse > 0.35 && (now - self.lastTouchTriggerTime > 5.0) {
+        self.lastTouchTriggerTime = now
+        self.log("TOUCH RILEVATO impulse=\(impulse)")
+        self.sensorEventSink?(["type": "touch", "intensity": impulse])
+      }
     }
   }
 
@@ -237,6 +280,7 @@ import CoreMotion
     UIDevice.current.isProximityMonitoringEnabled = false
     NotificationCenter.default.removeObserver(self, name: UIDevice.proximityStateDidChangeNotification, object: nil)
     motionManager.stopMagnetometerUpdates()
+    motionManager.stopAccelerometerUpdates()
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -304,7 +348,8 @@ Volume sistema: \(session.outputVolume)
 Voci IT installate: \(voci.isEmpty ? "NESSUNA" : voci)
 TTS in corso: \(synth.isSpeaking)
 Licenza salvata: \(saved.isEmpty ? "NO" : "SI (\(saved.count) chars)")
-Magnetometro: \(motionManager.isMagnetometerActive ? "ATTIVO" : "INATTIVO")
+Magnetometro (EMF): \(motionManager.isMagnetometerActive ? "ATTIVO" : "INATTIVO")
+Sensore Tocco (Accel): \(motionManager.isAccelerometerActive ? "ATTIVO" : "INATTIVO")
 EMF baseline: \(String(format: "%.1f", emfBaseline)) uT
 """
     log(report)
@@ -320,6 +365,40 @@ EMF baseline: \(String(format: "%.1f", emfBaseline)) uT
     var digest = [UInt8](repeating: 0, count: Int(CC_MD5_DIGEST_LENGTH))
     _ = data.withUnsafeBytes { CC_MD5($0.baseAddress, CC_LONG(data.count), &digest) }
     return digest.map { String(format: "%02x", $0) }.joined()
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Riproduzione Suono Risata Inquietante (Creepy Laugh)
+  // ──────────────────────────────────────────────────────────────────
+  private func playCreepyLaugh() {
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self else { return }
+      try? AVAudioSession.sharedInstance().setActive(true)
+
+      var soundURL: URL?
+      if let url = Bundle.main.url(forResource: "creepy_laugh", withExtension: "mp3") {
+        soundURL = url
+      } else if let key = FlutterDartProject.lookupKey(forAsset: "assets/audio/creepy_laugh.mp3") as String?,
+                let path = Bundle.main.path(forResource: key, ofType: nil) {
+        soundURL = URL(fileURLWithPath: path)
+      }
+
+      guard let url = soundURL else {
+        self.log("creepy_laugh.mp3 non trovato nel bundle, fallback chime")
+        self.playChime()
+        return
+      }
+
+      do {
+        self.creepyPlayer = try AVAudioPlayer(contentsOf: url)
+        self.creepyPlayer?.volume = 1.0
+        self.creepyPlayer?.prepareToPlay()
+        let ok = self.creepyPlayer?.play() ?? false
+        self.log("playCreepyLaugh -> play()=\(ok)")
+      } catch {
+        self.log("playCreepyLaugh errore: \(error.localizedDescription)")
+      }
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────

@@ -67,6 +67,9 @@ class _MainTabScreenState extends State<MainTabScreen> {
   String _audioDiagnosticResult = ''; // risultato diagnostica audio
   StreamSubscription<dynamic>? _sensorSubscription;
   bool _proximityAlert = false;
+  bool _touchAlert = false;
+  bool _enableCreepyLaugh = true;
+  DateTime? _lastTouchAlertTime;
   bool _emfSpikeAlert = false;
   double _emfValue = 0.0;
   double _emfDelta = 0.0;
@@ -218,15 +221,32 @@ class _MainTabScreenState extends State<MainTabScreen> {
               if (_lastProximityAlertTime == null ||
                   now.difference(_lastProximityAlertTime!).inSeconds > 5) {
                 _lastProximityAlertTime = now;
-                _audioChannel.invokeMethod('playProximityAlert');
-                _showSensorAlert(
-                  'PRESENZA RILEVATA',
-                  'Qualcosa si e avvicinato al dispositivo!',
-                  const Color(0xFFFF3366),
-                );
+                if (_enableCreepyLaugh) {
+                  _audioChannel.invokeMethod('playCreepyLaugh');
+                } else {
+                  _audioChannel.invokeMethod('playProximityAlert');
+                }
               }
             }
             if (mounted) setState(() => _proximityAlert = near);
+          } else if (type == 'touch') {
+            final now = DateTime.now();
+            if (_lastTouchAlertTime == null ||
+                now.difference(_lastTouchAlertTime!).inSeconds > 5) {
+              _lastTouchAlertTime = now;
+              if (mounted) {
+                setState(() => _touchAlert = true);
+              }
+              if (_enableCreepyLaugh) {
+                _audioChannel.invokeMethod('playCreepyLaugh');
+              } else {
+                _audioChannel.invokeMethod('playBeep', {'freq': 1400, 'durationMs': 120});
+              }
+              // Reset alert visivo tocco dopo 4 secondi
+              Future.delayed(const Duration(seconds: 4), () {
+                if (mounted) setState(() => _touchAlert = false);
+              });
+            }
           } else if (type == 'emf') {
             final value = (map['value'] as num?)?.toDouble() ?? 0.0;
             final delta = (map['delta'] as num?)?.toDouble() ?? 0.0;
@@ -951,6 +971,148 @@ class _MainTabScreenState extends State<MainTabScreen> {
             const SizedBox(height: 10),
           ],
 
+          const SizedBox(height: 10),
+
+          // PANNELLO SENSORI AMBIENTALI (Prossimita frontale, Tocco/Sfioramento posteriore, EMF)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF09131E),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: (_proximityAlert || _touchAlert || _emfSpikeAlert)
+                    ? const Color(0xFFFF3366)
+                    : const Color(0xFF122538),
+                width: (_proximityAlert || _touchAlert || _emfSpikeAlert) ? 1.5 : 1.0,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('SENSORI DI CONTATTO & CAMPO',
+                        style: TextStyle(color: Color(0xFF4D6682), fontSize: 9.5, fontWeight: FontWeight.bold, letterSpacing: 1)),
+                    if (_proximityAlert || _touchAlert || _emfSpikeAlert)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(color: const Color(0xFFFF3366), borderRadius: BorderRadius.circular(3)),
+                        child: Text(
+                          _touchAlert ? 'TOCCO RILEVATO!' : (_proximityAlert ? 'PRESENZA VICINA!' : 'SPIKE EMF!'),
+                          style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    // Prossimita Frontale
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(7),
+                        decoration: BoxDecoration(
+                          color: _proximityAlert ? const Color(0x33FF3366) : const Color(0xFF060B12),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: _proximityAlert ? const Color(0xFFFF3366) : const Color(0xFF1B3550)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(Icons.sensors, size: 12, color: _proximityAlert ? const Color(0xFFFF3366) : const Color(0xFF4D6682)),
+                                const SizedBox(width: 4),
+                                const Text('FRONTE', style: TextStyle(color: Color(0xFF8CA2BA), fontSize: 8.5, fontWeight: FontWeight.bold)),
+                              ],
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              _proximityAlert ? 'PRESENZA' : 'LIBERO',
+                              style: TextStyle(
+                                  color: _proximityAlert ? const Color(0xFFFF3366) : const Color(0xFF00FF88),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'monospace'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    // Tocco / Sfioramento (Retro & Bordi)
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(7),
+                        decoration: BoxDecoration(
+                          color: _touchAlert ? const Color(0x44FF3366) : const Color(0xFF060B12),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: _touchAlert ? const Color(0xFFFF3366) : const Color(0xFF1B3550)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(Icons.touch_app, size: 12, color: _touchAlert ? const Color(0xFFFF3366) : const Color(0xFF4D6682)),
+                                const SizedBox(width: 4),
+                                const Text('TOCCO/RETRO', style: TextStyle(color: Color(0xFF8CA2BA), fontSize: 8.5, fontWeight: FontWeight.bold)),
+                              ],
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              _touchAlert ? 'CONTATTO!' : 'NESSUNO',
+                              style: TextStyle(
+                                  color: _touchAlert ? const Color(0xFFFF3366) : const Color(0xFF00FF88),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'monospace'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    // EMF
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(7),
+                        decoration: BoxDecoration(
+                          color: _emfSpikeAlert ? const Color(0x33FFB700) : const Color(0xFF060B12),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: _emfSpikeAlert ? const Color(0xFFFFB700) : const Color(0xFF1B3550)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(Icons.bolt, size: 12, color: _emfSpikeAlert ? const Color(0xFFFFB700) : const Color(0xFF4D6682)),
+                                const SizedBox(width: 4),
+                                const Text('EMF', style: TextStyle(color: Color(0xFF8CA2BA), fontSize: 8.5, fontWeight: FontWeight.bold)),
+                              ],
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              '${_emfValue.toStringAsFixed(0)} uT',
+                              style: TextStyle(
+                                  color: _emfSpikeAlert ? const Color(0xFFFFB700) : const Color(0xFF00EFFF),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'monospace'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+
           // Modalità AM / FM
           Row(
             children: [
@@ -1356,6 +1518,15 @@ class _MainTabScreenState extends State<MainTabScreen> {
                     child: const Text('🔍 DIAGNOSTICA AUDIO', style: TextStyle(color: Color(0xFF00FF88), fontWeight: FontWeight.bold, fontSize: 11)),
                   ),
                 ),
+                const SizedBox(height: 6),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0x22FF3366), side: const BorderSide(color: Color(0xFFFF3366))),
+                    onPressed: () => _audioChannel.invokeMethod('playCreepyLaugh'),
+                    child: const Text('👻 TESTA RISATA (CREEPY LAUGH)', style: TextStyle(color: Color(0xFFFF3366), fontWeight: FontWeight.bold, fontSize: 11)),
+                  ),
+                ),
                 if (_audioDiagnosticResult.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Container(
@@ -1386,6 +1557,13 @@ class _MainTabScreenState extends State<MainTabScreen> {
                   value: _enableChime,
                   activeColor: const Color(0xFF00FF88),
                   onChanged: (v) => setState(() => _enableChime = v),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Risata Inquietante su Presenza/Tocco', style: TextStyle(fontSize: 12)),
+                  value: _enableCreepyLaugh,
+                  activeColor: const Color(0xFFFF3366),
+                  onChanged: (v) => setState(() => _enableCreepyLaugh = v),
                 ),
               ],
             ),
